@@ -1,0 +1,32 @@
+# Sensitive auth files
+auth/
+
+# Videos and thumbnails
+storage/videos/
+storage/thumbnails/
+
+# Logs
+logs/
+
+# Cache
+cache/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Python virtual environment
+venv/
+.env/
+
+# Excel data files
+*.xlsx
+
+# App state
+data/app_state.json
+
+# OS files
+.DS_Store
+Thumbs.db
