@@ -37,7 +37,9 @@ class ExcelManager:
     # Load or Create Excel
     # ===============================
     def load_excel(self, force=False):
-        os.makedirs(os.path.dirname(self.excel_file), exist_ok=True)
+        parent_dir = os.path.dirname(self.excel_file)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
 
         if (not force) and (self.df is not None) and os.path.exists(self.excel_file):
             current_mtime = os.path.getmtime(self.excel_file)
@@ -49,8 +51,11 @@ class ExcelManager:
             self.df = pd.DataFrame(columns=REQUIRED_COLUMNS)
             self.save()
         else:
-            # 🔥 FORCE ALL COLUMNS AS STRING (CRITICAL FIX)
-            self.df = pd.read_excel(self.excel_file, dtype=str)
+            try:
+                self.df = pd.read_excel(self.excel_file, dtype=str)
+            except (PermissionError, OSError) as err:
+                logging.warning("Excel read skipped due to transient file access issue: %s", err)
+                return False
             self._ensure_columns()
 
         # Replace NaN with empty string (VERY IMPORTANT)
@@ -100,7 +105,8 @@ class ExcelManager:
     # Get Pending Rows
     # ===============================
     def get_pending_rows(self):
-        return self.df[self.df["status"] == "PENDING"]
+        status_series = self.df["status"].astype(str).str.strip().str.upper()
+        return self.df[status_series == "PENDING"]
 
     def get_next_pending_index(self):
         pending = self.get_pending_rows()
@@ -136,9 +142,10 @@ class ExcelManager:
         self.save()
 
     def reset_uploading_rows(self):
-        uploading_rows = self.df[self.df["status"] == "UPLOADING"]
+        status_series = self.df["status"].astype(str).str.strip().str.upper()
+        uploading_rows = self.df[status_series == "UPLOADING"]
         if not uploading_rows.empty:
-            self.df.loc[self.df["status"] == "UPLOADING", "status"] = "PENDING"
+            self.df.loc[status_series == "UPLOADING", "status"] = "PENDING"
             self.save()
             logging.info("Reset stuck UPLOADING rows to PENDING.")
 

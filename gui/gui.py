@@ -3,12 +3,11 @@ from tkinter import filedialog, ttk, messagebox
 from PIL import Image, ImageTk
 import os
 
-from config.constants import APP_NAME, WINDOW_WIDTH, WINDOW_HEIGHT, BASE_DIR, EXCEL_FILE, VIDEOS_DIR, THUMBNAILS_DIR
+from config.constants import APP_NAME, WINDOW_WIDTH, WINDOW_HEIGHT, EXCEL_FILE, VIDEOS_DIR, THUMBNAILS_DIR
 from core.account_manager import AccountManager
 from core.upload_worker import UploadWorker
 from core.excel_manager import ExcelManager
 from core.input_config import load_input_sources, save_input_sources, save_last_account
-from config.settings import DELAY_SECONDS
 
 
 class YouTubeUploadGUI:
@@ -33,7 +32,7 @@ class YouTubeUploadGUI:
         self.excel = ExcelManager(excel_file=self.selected_excel_file, videos_dir=self.selected_videos_dir)
 
         self.thumbnail_image = None
-        self.countdown_value = 0
+        self._worker_finished_notified = False
 
         self.create_layout()
         self.load_accounts()
@@ -107,9 +106,8 @@ class YouTubeUploadGUI:
 
         self.stats_label = ttk.Label(status, text="")
         self.stats_label.pack(anchor="w")
-
-        self.delay_label = ttk.Label(status, text="Delay: Idle")
-        self.delay_label.pack(anchor="w")
+        self.worker_state_label = ttk.Label(status, text="Upload State: Idle")
+        self.worker_state_label.pack(anchor="w")
 
         self.progress = ttk.Progressbar(status, maximum=100)
         self.progress.pack(fill="x", pady=5)
@@ -120,21 +118,11 @@ class YouTubeUploadGUI:
         bottom = ttk.Frame(self.root, padding=5)
         bottom.pack(fill="x")
 
-        ttk.Button(bottom, text="Start",
-                   command=self.start_upload).pack(side="left", padx=5)
-        ttk.Button(bottom, text="Pause",
-                   command=self.pause_upload).pack(side="left", padx=5)
-        ttk.Button(bottom, text="Resume",
-                   command=self.resume_upload).pack(side="left", padx=5)
-        ttk.Button(bottom, text="Stop",
-                   command=self.stop_upload).pack(side="left", padx=5)
-
-        ttk.Button(bottom, text="Skip Current",
-                   command=self.skip_current_delay).pack(side="right", padx=5)
-        ttk.Button(bottom, text="Skip All",
-                   command=self.skip_all_delay).pack(side="right", padx=5)
-        ttk.Button(bottom, text="Restore Delay",
-                   command=self.restore_delay).pack(side="right", padx=5)
+        self.start_button = ttk.Button(bottom, text="Start", command=self.start_upload)
+        self.start_button.pack(side="left", padx=5)
+        ttk.Button(bottom, text="Pause", command=self.pause_upload).pack(side="left", padx=5)
+        ttk.Button(bottom, text="Resume", command=self.resume_upload).pack(side="left", padx=5)
+        ttk.Button(bottom, text="Stop", command=self.stop_upload).pack(side="left", padx=5)
 
     # ===============================
     # Account Handling
@@ -313,10 +301,13 @@ class YouTubeUploadGUI:
         if isinstance(thumb, str) and thumb.strip():
             abs_path = thumb if os.path.isabs(thumb) else os.path.join(self.selected_thumbnails_dir, thumb)
             if os.path.exists(abs_path):
-                img = Image.open(abs_path)
-                img = img.resize((250, 140))
-                self.thumbnail_image = ImageTk.PhotoImage(img)
-                self.thumbnail_label.config(image=self.thumbnail_image)
+                try:
+                    with Image.open(abs_path) as img:
+                        preview_img = img.resize((250, 140))
+                    self.thumbnail_image = ImageTk.PhotoImage(preview_img)
+                    self.thumbnail_label.config(image=self.thumbnail_image)
+                except OSError:
+                    self.thumbnail_label.config(image="")
             else:
                 self.thumbnail_label.config(image="")
         else:
@@ -330,61 +321,68 @@ class YouTubeUploadGUI:
             messagebox.showerror("Error", "No account loaded.")
             return
 
+        if self.upload_worker and self.upload_worker.is_alive():
+            messagebox.showwarning("Upload Running", "An upload is already running.")
+            return
+
+        pending = self.excel.get_pending_rows()
+        if pending.empty:
+            messagebox.showinfo("No Pending Rows", "No pending uploads found in queue.")
+            return
+
         self.upload_worker = UploadWorker(
             youtube_client=self.account_manager.youtube,
             account_name=self.account_manager.get_current_account(),
             progress_callback=self.update_progress,
-            delay_callback=self.update_delay_from_uploader,
             excel_file=self.selected_excel_file,
             videos_dir=self.selected_videos_dir,
             thumbnails_dir=self.selected_thumbnails_dir
         )
+        self._worker_finished_notified = False
         self.upload_worker.start()
-        self.countdown_value = 0
+        self.start_button.state(["disabled"])
+        self.worker_state_label.config(text="Upload State: Running")
         self.log("Upload started.")
 
     def pause_upload(self):
         if self.upload_worker:
             self.upload_worker.pause()
+            self.worker_state_label.config(text="Upload State: Paused")
             self.log("Paused.")
 
     def resume_upload(self):
         if self.upload_worker:
             self.upload_worker.resume()
+            self.worker_state_label.config(text="Upload State: Running")
             self.log("Resumed.")
 
     def stop_upload(self):
         if self.upload_worker:
             self.upload_worker.stop()
+            self.worker_state_label.config(text="Upload State: Stopping")
             self.log("Stopped.")
-
-    def skip_current_delay(self):
-        if self.upload_worker:
-            self.upload_worker.skip_current_delay()
-            self.countdown_value = 0
-            self.log("Skip current delay.")
-
-    def skip_all_delay(self):
-        if self.upload_worker:
-            self.upload_worker.skip_all_delay()
-            self.delay_label.config(text="Delay: Skipped (Session)")
-            self.log("Skip all delays.")
-
-    def restore_delay(self):
-        if self.upload_worker:
-            self.upload_worker.restore_delay()
-            self.delay_label.config(text="Delay: Normal")
-            self.log("Delay restored.")
 
     # ===============================
     # Auto Refresh
     # ===============================
     def auto_refresh(self):
-        changed = self.excel.reload_if_changed()
-        if changed:
-            self.refresh_queue(reload=False)
-            self.refresh_stats(reload=False)
-        self.update_delay_display()
+        try:
+            changed = self.excel.reload_if_changed()
+            if changed:
+                self.refresh_queue(reload=False)
+                self.refresh_stats(reload=False)
+        except Exception as err:
+            self.log(f"Auto refresh warning: {err}")
+
+        if self.upload_worker and not self.upload_worker.is_alive():
+            self.start_button.state(["!disabled"])
+            self.worker_state_label.config(text="Upload State: Stopped")
+            if not self._worker_finished_notified:
+                self.refresh_queue(reload=True)
+                self.refresh_stats(reload=False)
+                self.log("Upload worker finished.")
+                self._worker_finished_notified = True
+
         self.root.after(self.REFRESH_INTERVAL, self.auto_refresh)
 
     def refresh_queue(self, reload=True):
@@ -414,30 +412,9 @@ class YouTubeUploadGUI:
         )
         self.stats_label.config(text=text)
 
-    def update_delay_display(self):
-        if self.countdown_value > 0:
-            self.delay_label.config(text=f"Delay: {self.countdown_value} sec")
-
     def update_progress(self, value):
         # Called from worker thread; marshal UI update to Tk main thread
         self.root.after(0, lambda: self.progress.configure(value=value))
-
-    def update_delay_from_uploader(self, remaining, mode):
-        def _apply():
-            if mode == "running" and remaining is not None:
-                self.delay_label.config(text=f"Delay: {remaining} sec")
-                self.countdown_value = int(remaining)
-            elif mode == "finished":
-                self.delay_label.config(text="Delay: Idle")
-                self.countdown_value = 0
-            elif mode == "skipped_session":
-                self.delay_label.config(text="Delay: Skipped (Session)")
-                self.countdown_value = 0
-            elif mode == "skipped_current":
-                self.delay_label.config(text="Delay: Skipped (Current)")
-                self.countdown_value = 0
-
-        self.root.after(0, _apply)
 
     def log(self, message):
         self.log_text.insert(tk.END, message + "\n")

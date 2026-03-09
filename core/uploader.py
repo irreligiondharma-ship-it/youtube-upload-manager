@@ -1,48 +1,43 @@
 import json
 import logging
 import os
-import time
 from threading import Event
 
 from config.constants import APP_STATE_FILE
-from config.settings import AUTO_RESUME_ON_START, DELAY_SECONDS, RETRY_LIMIT
+from config.settings import AUTO_RESUME_ON_START, RETRY_LIMIT
 from core.excel_manager import ExcelManager
 from core.validator import Validator
 from core.youtube_service import YouTubeService
 
 
 class Uploader:
-    def __init__(self, youtube_client, account_name=None, progress_callback=None, delay_callback=None, excel_file=None, videos_dir=None, thumbnails_dir=None):
+    def __init__(self, youtube_client, account_name=None, progress_callback=None, excel_file=None, videos_dir=None, thumbnails_dir=None):
         self.youtube_service = YouTubeService(youtube_client)
         self.excel = ExcelManager(excel_file=excel_file, videos_dir=videos_dir)
         self.validator = Validator(videos_dir=videos_dir, thumbnails_dir=thumbnails_dir)
 
         self.account_name = account_name
         self.progress_callback = progress_callback
-        self.delay_callback = delay_callback
 
         self.stop_event = Event()
         self.pause_event = Event()
         self.pause_event.set()
 
-        self.skip_current_delay = False
-        self.skip_all_delay = False
-
         self.state = {}
         self.load_state()
 
         self.excel.reset_uploading_rows()
-        self._restore_runtime_flags_from_state()
 
     def save_state(self, current_index=None):
         state_file_dir = os.path.dirname(APP_STATE_FILE)
         if state_file_dir:
             os.makedirs(state_file_dir, exist_ok=True)
+        active_excel_file = str(getattr(self.excel, "excel_file", "")).strip()
 
         state_data = {
             "current_index": int(current_index) if current_index is not None else None,
             "account_name": self.account_name,
-            "skip_all_delay": self.skip_all_delay,
+            "excel_file": os.path.abspath(active_excel_file) if active_excel_file else "",
         }
 
         with open(APP_STATE_FILE, "w", encoding="utf-8") as f:
@@ -66,21 +61,27 @@ class Uploader:
     def resume(self):
         self.pause_event.set()
 
-    def skip_current(self):
-        self.skip_current_delay = True
-
-    def skip_all(self):
-        self.skip_all_delay = True
-
-    def restore_delay(self):
-        self.skip_all_delay = False
-
-    def _restore_runtime_flags_from_state(self):
-        if AUTO_RESUME_ON_START:
-            self.skip_all_delay = bool(self.state.get("skip_all_delay", False))
-
     def _get_resume_index(self):
         if not AUTO_RESUME_ON_START:
+            return None
+
+        state_account = str(self.state.get("account_name", "")).strip()
+        if state_account and self.account_name and state_account != self.account_name:
+            logging.info(
+                "State account (%s) does not match current account (%s); ignoring resume index.",
+                state_account,
+                self.account_name,
+            )
+            return None
+
+        state_excel = str(self.state.get("excel_file", "")).strip()
+        active_excel_file = str(getattr(self.excel, "excel_file", "")).strip()
+        if state_excel and active_excel_file and os.path.abspath(state_excel) != os.path.abspath(active_excel_file):
+            logging.info(
+                "State excel_file (%s) does not match active queue (%s); ignoring resume index.",
+                state_excel,
+                active_excel_file,
+            )
             return None
 
         raw_index = self.state.get("current_index")
@@ -103,14 +104,6 @@ class Uploader:
             return None
 
         return resume_index
-
-    def _notify_delay(self, remaining=None, mode="running"):
-        if not self.delay_callback:
-            return
-        try:
-            self.delay_callback(remaining, mode)
-        except Exception as err:
-            logging.warning("Delay callback failed: %s", err)
 
     def _notify_progress(self, value):
         if not self.progress_callback:
@@ -221,43 +214,9 @@ class Uploader:
                 self.excel.mark_uploaded(index, video_id)
                 self.save_state(current_index=None)
 
-                self.run_delay()
-
             except Exception as err:
                 self._log_upload_error(index=index, row=row, err=err)
                 self.excel.mark_failed(index, str(err))
                 self.save_state(current_index=None)
 
         logging.info("Uploader stopped.")
-
-    def run_delay(self):
-        if self.skip_all_delay:
-            logging.info("Delay skipped (session mode).")
-            self._notify_delay(None, "skipped_session")
-            return
-
-        if self.skip_current_delay:
-            logging.info("Current delay skipped.")
-            self.skip_current_delay = False
-            self._notify_delay(None, "skipped_current")
-            return
-
-        logging.info("Starting delay: %s seconds", DELAY_SECONDS)
-
-        for remaining in range(DELAY_SECONDS, 0, -1):
-            if self.stop_event.is_set():
-                break
-
-            self.pause_event.wait()
-            self._notify_delay(remaining, "running")
-
-            if self.skip_current_delay:
-                logging.info("Current delay skipped during countdown.")
-                self.skip_current_delay = False
-                self._notify_delay(None, "skipped_current")
-                break
-
-            time.sleep(1)
-
-        logging.info("Delay finished.")
-        self._notify_delay(0, "finished")

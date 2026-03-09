@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from config.constants import BASE_DIR, THUMBNAILS_DIR, VIDEOS_DIR
 from core.path_utils import first_existing_path
 from config.settings import DEFAULT_PRIVACY
@@ -113,6 +113,9 @@ class Validator:
 
         try:
             dt = datetime.strptime(str(schedule_time), "%Y-%m-%d %H:%M")
-            return dt.isoformat() + "Z"
+            local_tz = datetime.now().astimezone().tzinfo
+            dt_local = dt.replace(tzinfo=local_tz)
+            dt_utc = dt_local.astimezone(timezone.utc)
+            return dt_utc.isoformat().replace("+00:00", "Z")
         except ValueError:
             raise ValueError("Invalid schedule_time format. Use YYYY-MM-DD HH:MM")

@@ -36,7 +36,7 @@ class AccountManager:
         response = request.execute()
 
         if not response["items"]:
-            raise Exception("No YouTube channel found.")
+            raise RuntimeError("No YouTube channel found.")
 
         channel_title = response["items"][0]["snippet"]["title"]
         safe_name = self._sanitize_name(channel_title)

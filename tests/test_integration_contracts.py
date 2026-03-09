@@ -20,15 +20,6 @@ class DummyUploader:
     def resume(self):
         self.calls.append("resume")
 
-    def skip_current(self):
-        self.calls.append("skip_current")
-
-    def skip_all(self):
-        self.calls.append("skip_all")
-
-    def restore_delay(self):
-        self.calls.append("restore_delay")
-
 
 class DummyInsertRequest:
     def __init__(self, *_args, **_kwargs):
@@ -109,9 +100,6 @@ def test_upload_worker_proxies_controls(monkeypatch):
     worker.run()
     worker.pause()
     worker.resume()
-    worker.skip_current_delay()
-    worker.skip_all_delay()
-    worker.restore_delay()
     worker.stop()
 
     assert holder["obj"].kwargs["account_name"] == "acc"
@@ -119,9 +107,6 @@ def test_upload_worker_proxies_controls(monkeypatch):
         "start",
         "pause",
         "resume",
-        "skip_current",
-        "skip_all",
-        "restore_delay",
         "stop",
     ]
 
@@ -194,7 +179,7 @@ def test_uploader_stop_unblocks_when_paused(monkeypatch):
     assert uploader.pause_event.is_set()
 
 
-def test_uploader_restores_skip_all_delay_from_state(monkeypatch):
+def test_uploader_ignores_resume_index_when_state_account_differs(monkeypatch):
     class DummyExcel:
         def __init__(self, *_args, **_kwargs):
             import pandas as pd
@@ -219,12 +204,12 @@ def test_uploader_restores_skip_all_delay_from_state(monkeypatch):
     from core.uploader import Uploader
 
     def fake_load_state(self):
-        self.state = {"skip_all_delay": True, "current_index": None}
+        self.state = {"account_name": "other-account", "current_index": 0}
 
     monkeypatch.setattr(Uploader, "load_state", fake_load_state)
 
-    uploader = Uploader(youtube_client="x")
-    assert uploader.skip_all_delay is True
+    uploader = Uploader(youtube_client="x", account_name="current-account")
+    assert uploader._get_resume_index() is None
 
 
 def test_uploader_ignores_terminal_resume_index(monkeypatch):
@@ -260,43 +245,6 @@ def test_uploader_ignores_terminal_resume_index(monkeypatch):
     assert uploader._get_resume_index() is None
 
 
-def test_uploader_delay_callback_running_and_finished(monkeypatch):
-    class DummyExcel:
-        def __init__(self, *_args, **_kwargs):
-            import pandas as pd
-
-            self.df = pd.DataFrame([{"status": "PENDING"}], index=[0])
-
-        def reset_uploading_rows(self):
-            return None
-
-    class DummyValidator:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-    class DummyService:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-    monkeypatch.setattr("core.uploader.ExcelManager", DummyExcel)
-    monkeypatch.setattr("core.uploader.Validator", DummyValidator)
-    monkeypatch.setattr("core.uploader.YouTubeService", DummyService)
-    monkeypatch.setattr("core.uploader.DELAY_SECONDS", 3)
-    monkeypatch.setattr("core.uploader.time.sleep", lambda _x: None)
-
-    from core.uploader import Uploader
-
-    events = []
-    uploader = Uploader(youtube_client="x", delay_callback=lambda remaining, mode: events.append((remaining, mode)))
-
-    uploader.run_delay()
-
-    assert events[0] == (3, "running")
-    assert events[1] == (2, "running")
-    assert events[2] == (1, "running")
-    assert events[-1] == (0, "finished")
-
-
 def test_excel_manager_duplicate_matches_relative_and_absolute_paths(tmp_path, monkeypatch):
     excel_path = tmp_path / "data" / "upload_queue.xlsx"
     monkeypatch.setattr(excel_mod, "EXCEL_FILE", str(excel_path))
@@ -309,43 +257,6 @@ def test_excel_manager_duplicate_matches_relative_and_absolute_paths(tmp_path, m
     abs_path = tmp_path / "storage" / "videos" / "a.mp4"
     assert manager.is_duplicate(str(abs_path)) is True
     assert manager.is_duplicate("a.mp4") is True
-
-
-def test_uploader_delay_callback_skip_modes(monkeypatch):
-    class DummyExcel:
-        def __init__(self, *_args, **_kwargs):
-            import pandas as pd
-
-            self.df = pd.DataFrame([{"status": "PENDING"}], index=[0])
-
-        def reset_uploading_rows(self):
-            return None
-
-    class DummyValidator:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-    class DummyService:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-    monkeypatch.setattr("core.uploader.ExcelManager", DummyExcel)
-    monkeypatch.setattr("core.uploader.Validator", DummyValidator)
-    monkeypatch.setattr("core.uploader.YouTubeService", DummyService)
-
-    from core.uploader import Uploader
-
-    events = []
-    uploader = Uploader(youtube_client="x", delay_callback=lambda remaining, mode: events.append((remaining, mode)))
-
-    uploader.skip_all_delay = True
-    uploader.run_delay()
-    assert events[-1] == (None, "skipped_session")
-
-    uploader.skip_all_delay = False
-    uploader.skip_current_delay = True
-    uploader.run_delay()
-    assert events[-1] == (None, "skipped_current")
 
 
 def test_uploader_progress_callback_failure_does_not_crash(monkeypatch):
@@ -437,7 +348,6 @@ def test_uploader_progress_callback_failure_does_not_crash(monkeypatch):
     monkeypatch.setattr("core.uploader.ExcelManager", DummyExcel)
     monkeypatch.setattr("core.uploader.Validator", DummyValidator)
     monkeypatch.setattr("core.uploader.YouTubeService", DummyService)
-    monkeypatch.setattr("core.uploader.DELAY_SECONDS", 0)
 
     from core.uploader import Uploader
 
@@ -453,6 +363,7 @@ def test_uploader_progress_callback_failure_does_not_crash(monkeypatch):
 
 def test_validator_uses_selected_source_folders_for_filename_only_rows(tmp_path):
     from core.validator import Validator
+    from core.path_utils import normalize_path
 
     videos_dir = tmp_path / "videos"
     thumbs_dir = tmp_path / "thumbs"
@@ -466,8 +377,8 @@ def test_validator_uses_selected_source_folders_for_filename_only_rows(tmp_path)
 
     validator = Validator(videos_dir=str(videos_dir), thumbnails_dir=str(thumbs_dir))
 
-    assert validator.validate_video("sample.mp4") == str(video_file)
-    assert validator.validate_thumbnail("sample.jpg") == str(thumb_file)
+    assert validator.validate_video("sample.mp4") == normalize_path(str(video_file))
+    assert validator.validate_thumbnail("sample.jpg") == normalize_path(str(thumb_file))
 
 
 def test_input_sources_persist_and_load(tmp_path, monkeypatch):
@@ -516,6 +427,7 @@ def test_input_sources_save_last_account_updates_only_account(tmp_path, monkeypa
 def test_uploader_real_file_path_smoke_flow(tmp_path, monkeypatch):
     from core.uploader import Uploader
     from core.excel_manager import ExcelManager
+    from core.path_utils import normalize_path
 
     videos_dir = tmp_path / "videos"
     thumbs_dir = tmp_path / "thumbs"
@@ -561,7 +473,6 @@ def test_uploader_real_file_path_smoke_flow(tmp_path, monkeypatch):
 
     monkeypatch.setattr("core.uploader.YouTubeService", DummyService)
     monkeypatch.setattr("core.uploader.APP_STATE_FILE", str(data_dir / "app_state.json"))
-    monkeypatch.setattr("core.uploader.DELAY_SECONDS", 0)
 
     uploader = Uploader(
         youtube_client="x",
@@ -577,11 +488,11 @@ def test_uploader_real_file_path_smoke_flow(tmp_path, monkeypatch):
     assert post.df.loc[0, "youtube_url"] == "https://youtube.com/watch?v=vid-smoke"
 
     assert len(uploader.youtube_service.uploaded) == 1
-    assert uploader.youtube_service.uploaded[0]["video_path"] == str(video_file)
+    assert uploader.youtube_service.uploaded[0]["video_path"] == normalize_path(str(video_file))
     assert uploader.youtube_service.uploaded[0]["tags"] == ["a", "b"]
     assert uploader.youtube_service.uploaded[0]["category_id"] == "22"
 
-    assert uploader.youtube_service.thumbs == [("vid-smoke", str(thumb_file))]
+    assert uploader.youtube_service.thumbs == [("vid-smoke", normalize_path(str(thumb_file)))]
     assert uploader.youtube_service.playlists == [("vid-smoke", "PL123")]
 
 
@@ -617,6 +528,7 @@ def test_path_utils_first_existing_and_normalize(tmp_path):
 
 def test_validator_resolve_path_prioritizes_selected_folder(tmp_path):
     from core.validator import Validator
+    from core.path_utils import normalize_path
 
     base_dir = tmp_path / "base"
     selected = tmp_path / "selected"
@@ -633,7 +545,7 @@ def test_validator_resolve_path_prioritizes_selected_folder(tmp_path):
     try:
         validator = Validator(videos_dir=str(selected), thumbnails_dir=str(selected))
         resolved = validator.resolve_path("same.mp4", str(selected))
-        assert resolved == str((selected / "same.mp4").resolve())
+        assert resolved == normalize_path(str((selected / "same.mp4").resolve()))
     finally:
         validator_mod.BASE_DIR = old_base
 
@@ -673,3 +585,19 @@ def test_uploader_classify_error_categories(monkeypatch):
     assert uploader._classify_error(RuntimeError("token invalid")) == "authentication"
     assert uploader._classify_error(RuntimeError("api http error")) == "api"
     assert uploader._classify_error(RuntimeError("some unknown failure")) == "runtime"
+
+
+def test_excel_manager_get_pending_rows_is_case_insensitive(tmp_path):
+    from core.excel_manager import ExcelManager
+
+    excel_file = tmp_path / "data" / "upload_queue.xlsx"
+    manager = ExcelManager(excel_file=str(excel_file), videos_dir=str(tmp_path / "videos"))
+    manager.df.loc[0, "video_path"] = "a.mp4"
+    manager.df.loc[0, "status"] = " pending "
+    manager.df.loc[1, "video_path"] = "b.mp4"
+    manager.df.loc[1, "status"] = "FAILED"
+    manager.save()
+
+    pending = manager.get_pending_rows()
+    assert len(pending) == 1
+    assert pending.iloc[0]["video_path"] == "a.mp4"
