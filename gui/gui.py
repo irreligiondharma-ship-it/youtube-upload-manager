@@ -33,6 +33,8 @@ class YouTubeUploadGUI:
 
         self.thumbnail_image = None
         self._worker_finished_notified = False
+        self.is_paused = False
+        self.current_upload_index = None
 
         self.create_layout()
         self.load_accounts()
@@ -108,9 +110,16 @@ class YouTubeUploadGUI:
         self.stats_label.pack(anchor="w")
         self.worker_state_label = ttk.Label(status, text="Upload State: Idle")
         self.worker_state_label.pack(anchor="w")
+        self.current_upload_label = ttk.Label(status, text="Now Uploading: None")
+        self.current_upload_label.pack(anchor="w")
 
-        self.progress = ttk.Progressbar(status, maximum=100)
-        self.progress.pack(fill="x", pady=5)
+        ttk.Label(status, text="Current Video Progress").pack(anchor="w")
+        self.current_video_progress = ttk.Progressbar(status, maximum=100)
+        self.current_video_progress.pack(fill="x", pady=(0, 5))
+
+        ttk.Label(status, text="Overall Queue Progress").pack(anchor="w")
+        self.overall_progress = ttk.Progressbar(status, maximum=100)
+        self.overall_progress.pack(fill="x", pady=(0, 5))
 
         self.log_text = tk.Text(status, height=5)
         self.log_text.pack(fill="both", expand=True)
@@ -120,9 +129,10 @@ class YouTubeUploadGUI:
 
         self.start_button = ttk.Button(bottom, text="Start", command=self.start_upload)
         self.start_button.pack(side="left", padx=5)
-        ttk.Button(bottom, text="Pause", command=self.pause_upload).pack(side="left", padx=5)
-        ttk.Button(bottom, text="Resume", command=self.resume_upload).pack(side="left", padx=5)
-        ttk.Button(bottom, text="Stop", command=self.stop_upload).pack(side="left", padx=5)
+        self.pause_resume_button = ttk.Button(bottom, text="Pause", command=self.toggle_pause_resume, state="disabled")
+        self.pause_resume_button.pack(side="left", padx=5)
+        self.stop_button = ttk.Button(bottom, text="Stop", command=self.stop_upload, state="disabled")
+        self.stop_button.pack(side="left", padx=5)
 
     # ===============================
     # Account Handling
@@ -330,37 +340,57 @@ class YouTubeUploadGUI:
             messagebox.showinfo("No Pending Rows", "No pending uploads found in queue.")
             return
 
+        if not self.ensure_excel_closed_before_upload():
+            return
+
         self.upload_worker = UploadWorker(
             youtube_client=self.account_manager.youtube,
             account_name=self.account_manager.get_current_account(),
             progress_callback=self.update_progress,
+            status_callback=self.handle_uploader_event,
             excel_file=self.selected_excel_file,
             videos_dir=self.selected_videos_dir,
             thumbnails_dir=self.selected_thumbnails_dir
         )
         self._worker_finished_notified = False
+        self.is_paused = False
+        self.current_upload_index = None
         self.upload_worker.start()
-        self.start_button.state(["disabled"])
-        self.worker_state_label.config(text="Upload State: Running")
+        self.set_controls_for_running()
+        self.current_video_progress.configure(value=0)
+        self.current_upload_label.config(text="Now Uploading: Preparing...")
         self.log("Upload started.")
 
-    def pause_upload(self):
-        if self.upload_worker:
-            self.upload_worker.pause()
-            self.worker_state_label.config(text="Upload State: Paused")
-            self.log("Paused.")
-
-    def resume_upload(self):
-        if self.upload_worker:
+    def toggle_pause_resume(self):
+        if not self.upload_worker or not self.upload_worker.is_alive():
+            return
+        if self.is_paused:
             self.upload_worker.resume()
+            self.is_paused = False
+            self.pause_resume_button.config(text="Pause")
             self.worker_state_label.config(text="Upload State: Running")
             self.log("Resumed.")
+            return
+        self.upload_worker.pause()
+        self.is_paused = True
+        self.pause_resume_button.config(text="Resume")
+        self.worker_state_label.config(text="Upload State: Paused")
+        self.log("Paused.")
 
     def stop_upload(self):
-        if self.upload_worker:
-            self.upload_worker.stop()
-            self.worker_state_label.config(text="Upload State: Stopping")
-            self.log("Stopped.")
+        if not self.upload_worker or not self.upload_worker.is_alive():
+            return
+
+        confirm = messagebox.askyesno(
+            "Stop Upload",
+            "Are you sure you want to stop the upload process?\nCurrent upload will stop as soon as possible.",
+        )
+        if not confirm:
+            return
+
+        self.upload_worker.stop()
+        self.set_controls_for_stopping()
+        self.log("Stop requested.")
 
     # ===============================
     # Auto Refresh
@@ -368,18 +398,20 @@ class YouTubeUploadGUI:
     def auto_refresh(self):
         try:
             changed = self.excel.reload_if_changed()
+            self.refresh_stats(reload=False)
             if changed:
                 self.refresh_queue(reload=False)
-                self.refresh_stats(reload=False)
         except Exception as err:
             self.log(f"Auto refresh warning: {err}")
 
         if self.upload_worker and not self.upload_worker.is_alive():
-            self.start_button.state(["!disabled"])
-            self.worker_state_label.config(text="Upload State: Stopped")
+            self.set_controls_for_idle()
             if not self._worker_finished_notified:
                 self.refresh_queue(reload=True)
                 self.refresh_stats(reload=False)
+                self.current_upload_index = None
+                self.current_upload_label.config(text="Now Uploading: None")
+                self.current_video_progress.configure(value=0)
                 self.log("Upload worker finished.")
                 self._worker_finished_notified = True
 
@@ -401,7 +433,7 @@ class YouTubeUploadGUI:
         if stats['total'] > 0:
             percent = int((stats['uploaded'] / stats['total']) * 100)
 
-        self.progress["value"] = percent
+        self.overall_progress["value"] = percent
 
         text = (
             f"Total: {stats['total']} | "
@@ -414,7 +446,122 @@ class YouTubeUploadGUI:
 
     def update_progress(self, value):
         # Called from worker thread; marshal UI update to Tk main thread
-        self.root.after(0, lambda: self.progress.configure(value=value))
+        self.root.after(0, lambda: self.current_video_progress.configure(value=value))
+
+    def handle_uploader_event(self, event, payload):
+        def _apply():
+            if event == "state_change":
+                state = payload.get("state", "")
+                if state == "running":
+                    self.worker_state_label.config(text="Upload State: Running")
+                    if self.upload_worker and self.upload_worker.is_alive():
+                        self.set_controls_for_running()
+                elif state == "paused":
+                    self.worker_state_label.config(text="Upload State: Paused")
+                elif state == "stopping":
+                    self.set_controls_for_stopping()
+                    self.worker_state_label.config(text="Upload State: Stopping")
+                elif state == "stopped":
+                    self.set_controls_for_idle()
+                    self.worker_state_label.config(text="Upload State: Stopped")
+            elif event == "item_start":
+                index = payload.get("index")
+                title = payload.get("title", "")
+                video_path = payload.get("video_path", "")
+                self.current_upload_index = index
+                self.current_video_progress.configure(value=0)
+                self.current_upload_label.config(text=f"Now Uploading: {title} ({video_path})")
+                self.log(f"Uploading row {index}: {title}")
+                self.select_queue_row_by_index(index)
+            elif event == "item_done":
+                index = payload.get("index")
+                title = payload.get("title", "")
+                video_id = payload.get("video_id", "")
+                self.current_video_progress.configure(value=100)
+                self.log(f"Uploaded row {index}: {title} ({video_id})")
+            elif event == "item_failed":
+                index = payload.get("index")
+                title = payload.get("title", "")
+                error = payload.get("error", "")
+                self.log(f"Failed row {index}: {title} | {error}")
+        self.root.after(0, _apply)
+
+    def select_queue_row_by_index(self, index):
+        try:
+            list_pos = self.excel.df.index.get_loc(index)
+        except KeyError:
+            return
+        self.queue_listbox.selection_clear(0, tk.END)
+        self.queue_listbox.selection_set(list_pos)
+        self.queue_listbox.activate(list_pos)
+        self.queue_listbox.see(list_pos)
+
+    def set_controls_for_running(self):
+        self.start_button.config(state="disabled")
+        self.pause_resume_button.config(state="normal", text="Pause")
+        self.stop_button.config(state="normal")
+        self.is_paused = False
+
+    def set_controls_for_stopping(self):
+        self.start_button.config(state="disabled")
+        self.pause_resume_button.config(state="disabled")
+        self.stop_button.config(state="disabled")
+
+    def set_controls_for_idle(self):
+        self.start_button.config(state="normal")
+        self.pause_resume_button.config(state="disabled", text="Pause")
+        self.stop_button.config(state="disabled")
+        self.is_paused = False
+
+    def is_file_locked_for_write(self, path):
+        if not path or not os.path.exists(path):
+            return False
+        try:
+            with open(path, "a+b"):
+                return False
+        except OSError:
+            return True
+
+    def ensure_excel_closed_before_upload(self):
+        excel_path = self.selected_excel_file
+        if not self.is_file_locked_for_write(excel_path):
+            return True
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Excel File In Use")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+        dialog.protocol("WM_DELETE_WINDOW", lambda: None)
+        dialog.bind("<Escape>", lambda _e: None)
+
+        frame = ttk.Frame(dialog, padding=12)
+        frame.pack(fill="both", expand=True)
+
+        message_var = tk.StringVar(
+            value=(
+                "Please close the Excel file before starting upload.\n"
+                "After closing it, click OK."
+            )
+        )
+        ttk.Label(frame, textvariable=message_var, justify="left").pack(anchor="w")
+
+        allowed = {"ready": False}
+
+        def on_ok():
+            if self.is_file_locked_for_write(excel_path):
+                message_var.set(
+                    "Excel file is still open.\n"
+                    "Please close the file and click OK again."
+                )
+                return
+            allowed["ready"] = True
+            dialog.destroy()
+
+        ttk.Button(frame, text="OK", command=on_ok).pack(anchor="e", pady=(10, 0))
+
+        self.root.wait_window(dialog)
+        return allowed["ready"]
 
     def log(self, message):
         self.log_text.insert(tk.END, message + "\n")

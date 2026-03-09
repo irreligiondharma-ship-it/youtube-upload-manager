@@ -26,6 +26,8 @@ class YouTubeService:
         category_id: str = "22",
         publish_at: Optional[str] = None,
         progress_callback=None,
+        pause_event=None,
+        stop_event=None,
     ) -> str:
         body = {
             "snippet": {
@@ -52,6 +54,10 @@ class YouTubeService:
 
         response = None
         while response is None:
+            if stop_event and stop_event.is_set():
+                raise InterruptedError("Upload stopped by user.")
+            if pause_event:
+                pause_event.wait()
             status, response = request.next_chunk()
             if status and progress_callback:
                 percent = int(status.progress() * 100)

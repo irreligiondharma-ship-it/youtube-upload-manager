@@ -11,13 +11,23 @@ from core.youtube_service import YouTubeService
 
 
 class Uploader:
-    def __init__(self, youtube_client, account_name=None, progress_callback=None, excel_file=None, videos_dir=None, thumbnails_dir=None):
+    def __init__(
+        self,
+        youtube_client,
+        account_name=None,
+        progress_callback=None,
+        status_callback=None,
+        excel_file=None,
+        videos_dir=None,
+        thumbnails_dir=None,
+    ):
         self.youtube_service = YouTubeService(youtube_client)
         self.excel = ExcelManager(excel_file=excel_file, videos_dir=videos_dir)
         self.validator = Validator(videos_dir=videos_dir, thumbnails_dir=thumbnails_dir)
 
         self.account_name = account_name
         self.progress_callback = progress_callback
+        self.status_callback = status_callback
 
         self.stop_event = Event()
         self.pause_event = Event()
@@ -54,12 +64,15 @@ class Uploader:
         self.stop_event.set()
         # Unblock if currently paused so thread can exit promptly
         self.pause_event.set()
+        self._notify_status("state_change", state="stopping")
 
     def pause(self):
         self.pause_event.clear()
+        self._notify_status("state_change", state="paused")
 
     def resume(self):
         self.pause_event.set()
+        self._notify_status("state_change", state="running")
 
     def _get_resume_index(self):
         if not AUTO_RESUME_ON_START:
@@ -113,6 +126,14 @@ class Uploader:
         except Exception as err:
             logging.warning("Progress callback failed: %s", err)
 
+    def _notify_status(self, event, **payload):
+        if not self.status_callback:
+            return
+        try:
+            self.status_callback(event, payload)
+        except Exception as err:
+            logging.warning("Status callback failed: %s", err)
+
     def _classify_error(self, err):
         if isinstance(err, (FileNotFoundError, ValueError)):
             return "validation"
@@ -145,6 +166,7 @@ class Uploader:
         )
 
     def start(self):
+        self._notify_status("state_change", state="running")
         resume_index = self._get_resume_index()
         if resume_index is not None:
             logging.info("Resuming from index: %s", resume_index)
@@ -163,6 +185,12 @@ class Uploader:
                 break
 
             row = self.excel.df.loc[index]
+            self._notify_status(
+                "item_start",
+                index=int(index),
+                title=str(row.get("title", "")).strip(),
+                video_path=str(row.get("video_path", "")).strip(),
+            )
 
             try:
                 self.save_state(current_index=index)
@@ -197,6 +225,8 @@ class Uploader:
                             category_id=category_id,
                             publish_at=schedule,
                             progress_callback=self._notify_progress,
+                            pause_event=self.pause_event,
+                            stop_event=self.stop_event,
                         )
                         break
                     except Exception as err:
@@ -213,10 +243,23 @@ class Uploader:
 
                 self.excel.mark_uploaded(index, video_id)
                 self.save_state(current_index=None)
+                self._notify_status(
+                    "item_done",
+                    index=int(index),
+                    video_id=str(video_id),
+                    title=str(row.get("title", "")).strip(),
+                )
 
             except Exception as err:
                 self._log_upload_error(index=index, row=row, err=err)
                 self.excel.mark_failed(index, str(err))
                 self.save_state(current_index=None)
+                self._notify_status(
+                    "item_failed",
+                    index=int(index),
+                    error=str(err),
+                    title=str(row.get("title", "")).strip(),
+                )
 
         logging.info("Uploader stopped.")
+        self._notify_status("state_change", state="stopped")
