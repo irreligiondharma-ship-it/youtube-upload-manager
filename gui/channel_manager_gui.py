@@ -455,6 +455,9 @@ class ChannelManagerGUI:
         self.refresh_list()
         if self.excel_path:
             self.set_status("Status: Row saved to Excel.")
+            messagebox.showinfo("Saved", "Row saved to Excel.", parent=self.dialog)
+        else:
+            messagebox.showinfo("Saved", "Row saved in memory. Export to Excel to persist.", parent=self.dialog)
 
     def apply_selected(self):
         selection = self.listbox.curselection()
