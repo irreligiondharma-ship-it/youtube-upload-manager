@@ -8,6 +8,7 @@ from core.account_manager import AccountManager
 from core.upload_worker import UploadWorker
 from core.excel_manager import ExcelManager
 from core.input_config import load_input_sources, save_input_sources, save_last_account
+from gui.channel_manager_gui import ChannelManagerGUI
 
 
 class YouTubeUploadGUI:
@@ -18,7 +19,7 @@ class YouTubeUploadGUI:
         self.root = root
         self.root.title(APP_NAME)
         self.root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
-        self.root.resizable(False, False)
+        self.root.resizable(True, True)
 
         self.account_manager = AccountManager()
         self.upload_worker = None
@@ -58,6 +59,8 @@ class YouTubeUploadGUI:
                    command=self.change_account).pack(side="right", padx=5)
         ttk.Button(top, text="Remove Account",
                    command=self.remove_account).pack(side="right", padx=5)
+        ttk.Button(top, text="Channel Manager",
+                   command=self.open_channel_manager).pack(side="right", padx=5)
         ttk.Button(top, text="Add Account",
                    command=self.add_account).pack(side="right")
 
@@ -160,6 +163,16 @@ class YouTubeUploadGUI:
             messagebox.showinfo("Success", f"Account added: {name}")
         except Exception as e:
             messagebox.showerror("Error", str(e))
+
+    def open_channel_manager(self):
+        if not self.account_manager.youtube:
+            messagebox.showerror("Error", "No account loaded.")
+            return
+        ChannelManagerGUI(
+            self.root,
+            youtube_client=self.account_manager.youtube,
+            account_name=self.account_manager.get_current_account() or "",
+        )
 
     def remove_account(self):
         accounts = sorted(self.account_manager.list_accounts())
