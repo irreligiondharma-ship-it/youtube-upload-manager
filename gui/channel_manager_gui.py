@@ -71,6 +71,7 @@ class ChannelManagerGUI:
 
         form = ttk.LabelFrame(right, text="Edit Fields", padding=6)
         form.pack(fill="both", expand=True, pady=(8, 0))
+        form.columnconfigure(1, weight=1)
 
         self.field_vars = {}
         self._add_field(form, "title", 0)
