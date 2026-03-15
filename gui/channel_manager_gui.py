@@ -56,10 +56,11 @@ class _ScrollableFrame(ttk.Frame):
 
 
 class ChannelManagerGUI:
-    def __init__(self, root, youtube_client, account_name=""):
+    def __init__(self, root, youtube_client, account_name="", account_manager=None):
         self.root = root
         self.youtube = youtube_client
         self.account_name = account_name or "Unknown"
+        self.account_manager = account_manager
         self.videos = []
         self._busy = False
         self.playlist_options = []
@@ -81,7 +82,8 @@ class ChannelManagerGUI:
 
         header = ttk.Frame(self.dialog, padding=8)
         header.pack(fill="x")
-        ttk.Label(header, text=f"Account: {self.account_name}").pack(side="left")
+        self.account_label = ttk.Label(header, text=f"Account: {self.account_name}")
+        self.account_label.pack(side="left")
 
         controls = ttk.Frame(self.dialog, padding=8)
         controls.pack(fill="x")
@@ -472,6 +474,8 @@ class ChannelManagerGUI:
         if ok:
             messagebox.showinfo("Success", msg, parent=self.dialog)
         else:
+            if err_code == "permission" and self._prompt_reauth(msg):
+                self.set_status("Status: Re-login completed. Please retry.")
             messagebox.showerror("Failed", msg, parent=self.dialog)
 
     def apply_pending(self):
@@ -479,16 +483,19 @@ class ChannelManagerGUI:
         success = 0
         failed = 0
         first_error = ""
+        permission_error = ""
         for idx, row in self.df.iterrows():
             if str(row.get("status", "")).upper() == "READY_TO_UPDATE":
                 total += 1
-                ok, msg = self.apply_row(idx)
+                ok, msg, err_code = self.apply_row(idx)
                 if ok:
                     success += 1
                 else:
                     failed += 1
                     if not first_error:
                         first_error = msg
+                    if err_code == "permission" and not permission_error:
+                        permission_error = msg
         if total == 0:
             messagebox.showinfo("Apply Pending", "No rows marked READY_TO_UPDATE.", parent=self.dialog)
         elif failed:
@@ -499,6 +506,9 @@ class ChannelManagerGUI:
             )
         else:
             messagebox.showinfo("Apply Pending", f"All done. Success: {success}.", parent=self.dialog)
+        if permission_error:
+            if self._prompt_reauth(permission_error):
+                self.set_status("Status: Re-login completed. Please retry.")
 
     def _get_scopes(self):
         creds = None
@@ -533,11 +543,11 @@ class ChannelManagerGUI:
             self.df.at[index, "status"] = "FAILED"
             self.df.at[index, "error_message"] = "Missing video_id"
             self.refresh_list()
-            return False, "Missing video_id"
+            return False, "Missing video_id", "validation"
 
         action = str(row.get("action", "")).strip().lower()
         if action in ("skip", "ignored"):
-            return True, f"Skipped {video_id}."
+            return True, f"Skipped {video_id}.", ""
 
         try:
             playlist_action = str(row.get("playlist_action", "")).strip().lower()
@@ -635,11 +645,33 @@ class ChannelManagerGUI:
             self.df.at[index, "status"] = "UPDATED"
             self.df.at[index, "error_message"] = ""
             success_msg = f"Updated {video_id}."
+            err_code = ""
         except Exception as err:
             self.df.at[index, "status"] = "FAILED"
             self.df.at[index, "error_message"] = str(err)
             success_msg = str(err)
+            err_code = "permission" if isinstance(err, PermissionError) else "error"
         if self.excel_path:
             self.df.to_excel(self.excel_path, index=False)
         self.refresh_list()
-        return self.df.at[index, "status"] == "UPDATED", success_msg
+        return self.df.at[index, "status"] == "UPDATED", success_msg, err_code
+
+    def _prompt_reauth(self, message):
+        if not self.account_manager:
+            return False
+        prompt = (
+            f"{message}\n\n"
+            "Do you want to re-login now with required permissions?"
+        )
+        if not messagebox.askyesno("Authentication Required", prompt, parent=self.dialog):
+            return False
+        try:
+            name = self.account_manager.add_account()
+            self.account_manager.load_account(name)
+            self.youtube = self.account_manager.youtube
+            self.account_name = name
+            self.account_label.config(text=f"Account: {self.account_name}")
+            return True
+        except Exception as err:
+            messagebox.showerror("Re-login Failed", str(err), parent=self.dialog)
+            return False

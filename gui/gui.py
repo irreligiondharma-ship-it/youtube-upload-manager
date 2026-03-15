@@ -172,6 +172,7 @@ class YouTubeUploadGUI:
             self.root,
             youtube_client=self.account_manager.youtube,
             account_name=self.account_manager.get_current_account() or "",
+            account_manager=self.account_manager,
         )
 
     def remove_account(self):
