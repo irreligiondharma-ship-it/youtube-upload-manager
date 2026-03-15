@@ -1,10 +1,14 @@
+import io
+import os
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from urllib.request import urlopen
 
 import pandas as pd
+from PIL import Image, ImageTk
 
-from core.channel_manager import fetch_channel_videos
+from core.channel_manager import FULL_COLUMNS, ensure_columns, fetch_channel_videos
 
 
 class ChannelManagerGUI:
@@ -19,7 +23,7 @@ class ChannelManagerGUI:
         self.dialog.title("Channel Manager")
         self.dialog.transient(root)
         self.dialog.grab_set()
-        self.dialog.geometry("720x500")
+        self.dialog.geometry("980x620")
         self.dialog.resizable(True, True)
 
         header = ttk.Frame(self.dialog, padding=8)
@@ -30,18 +34,65 @@ class ChannelManagerGUI:
         controls.pack(fill="x")
         self.fetch_button = ttk.Button(controls, text="Fetch Channel Videos", command=self.fetch_videos)
         self.fetch_button.pack(side="left")
+        self.load_button = ttk.Button(controls, text="Load Excel", command=self.load_excel)
+        self.load_button.pack(side="left", padx=6)
         self.export_button = ttk.Button(controls, text="Export to Excel", command=self.export_excel, state="disabled")
         self.export_button.pack(side="left", padx=6)
+        self.apply_selected_button = ttk.Button(
+            controls, text="Apply Selected", command=self.apply_selected, state="disabled"
+        )
+        self.apply_selected_button.pack(side="left", padx=6)
+        self.apply_all_button = ttk.Button(
+            controls, text="Apply Pending", command=self.apply_pending, state="disabled"
+        )
+        self.apply_all_button.pack(side="left", padx=6)
 
         self.status_label = ttk.Label(self.dialog, text="Status: Idle")
         self.status_label.pack(anchor="w", padx=8)
 
-        self.listbox = tk.Listbox(self.dialog)
-        self.listbox.pack(fill="both", expand=True, padx=8, pady=8)
+        body = ttk.Frame(self.dialog, padding=8)
+        body.pack(fill="both", expand=True)
+
+        left = ttk.Frame(body)
+        left.pack(side="left", fill="both", expand=True)
+
+        self.listbox = tk.Listbox(left)
+        self.listbox.pack(fill="both", expand=True)
+        self.listbox.bind("<<ListboxSelect>>", self.on_select)
+
+        right = ttk.Frame(body)
+        right.pack(side="right", fill="both", expand=True, padx=(8, 0))
+
+        preview = ttk.LabelFrame(right, text="Preview", padding=6)
+        preview.pack(fill="x")
+        self.thumb_label = ttk.Label(preview)
+        self.thumb_label.pack()
+        self._thumb_image = None
+
+        form = ttk.LabelFrame(right, text="Edit Fields", padding=6)
+        form.pack(fill="both", expand=True, pady=(8, 0))
+
+        self.field_vars = {}
+        self._add_field(form, "title", 0)
+        self._add_field(form, "description", 1, multiline=True)
+        self._add_field(form, "tags", 2)
+        self._add_field(form, "privacy_status", 3)
+        self._add_field(form, "category_id", 4)
+        self._add_field(form, "publish_at", 5)
+        self._add_field(form, "thumbnail_path", 6)
+        self._add_field(form, "playlist_id", 7)
+        self._add_field(form, "playlist_name", 8)
+        self._add_field(form, "action", 9)
+
+        self.save_row_button = ttk.Button(form, text="Save Row (Excel)", command=self.save_row)
+        self.save_row_button.grid(row=10, column=1, sticky="e", pady=(8, 0))
 
         bottom = ttk.Frame(self.dialog, padding=8)
         bottom.pack(fill="x")
         ttk.Button(bottom, text="Close", command=self.dialog.destroy).pack(side="right")
+
+        self.df = pd.DataFrame(columns=FULL_COLUMNS)
+        self.excel_path = ""
 
     def set_status(self, text):
         self.status_label.config(text=text)
@@ -51,14 +102,18 @@ class ChannelManagerGUI:
             return
         self._busy = True
         self.fetch_button.config(state="disabled")
+        self.load_button.config(state="disabled")
         self.export_button.config(state="disabled")
+        self.apply_selected_button.config(state="disabled")
+        self.apply_all_button.config(state="disabled")
         self.listbox.delete(0, tk.END)
         self.set_status("Status: Fetching videos...")
 
         def run():
             try:
                 videos = fetch_channel_videos(self.youtube, progress_callback=self.on_progress)
-                self.videos = videos
+                self.df = pd.DataFrame(videos)
+                ensure_columns(self.df)
                 self.root.after(0, self.on_fetch_done)
             except Exception as err:
                 self.root.after(0, lambda: self.on_fetch_error(err))
@@ -69,24 +124,27 @@ class ChannelManagerGUI:
         self.root.after(0, lambda: self.set_status(f"Status: Fetched {count} videos..."))
 
     def on_fetch_done(self):
-        for item in self.videos:
-            title = item.get("title", "")
-            vid = item.get("video_id", "")
-            self.listbox.insert(tk.END, f"{title} ({vid})")
-        self.set_status(f"Status: Done. Total {len(self.videos)} videos.")
+        self.refresh_list()
+        self.set_status(f"Status: Done. Total {len(self.df)} videos.")
         self.fetch_button.config(state="normal")
-        self.export_button.config(state="normal" if self.videos else "disabled")
+        self.load_button.config(state="normal")
+        self.export_button.config(state="normal" if len(self.df) else "disabled")
+        self.apply_selected_button.config(state="normal" if len(self.df) else "disabled")
+        self.apply_all_button.config(state="normal" if len(self.df) else "disabled")
         self._busy = False
 
     def on_fetch_error(self, err):
         self.set_status("Status: Error")
         self.fetch_button.config(state="normal")
+        self.load_button.config(state="normal")
         self.export_button.config(state="disabled")
+        self.apply_selected_button.config(state="disabled")
+        self.apply_all_button.config(state="disabled")
         self._busy = False
         messagebox.showerror("Error", str(err), parent=self.dialog)
 
     def export_excel(self):
-        if not self.videos:
+        if self.df.empty:
             messagebox.showinfo("No Data", "No videos to export.", parent=self.dialog)
             return
         path = filedialog.asksaveasfilename(
@@ -96,6 +154,181 @@ class ChannelManagerGUI:
         )
         if not path:
             return
-        df = pd.DataFrame(self.videos)
-        df.to_excel(path, index=False)
-        messagebox.showinfo("Exported", f"Saved {len(self.videos)} videos to Excel.", parent=self.dialog)
+        ensure_columns(self.df)
+        self.df.to_excel(path, index=False)
+        self.excel_path = path
+        messagebox.showinfo("Exported", f"Saved {len(self.df)} videos to Excel.", parent=self.dialog)
+
+    def load_excel(self):
+        path = filedialog.askopenfilename(
+            title="Open Channel Excel",
+            filetypes=[("Excel Files", "*.xlsx *.xls"), ("All Files", "*.*")],
+        )
+        if not path:
+            return
+        df = pd.read_excel(path, dtype=str)
+        self.df = ensure_columns(df.fillna(""))
+        self.excel_path = path
+        self.refresh_list()
+        self.export_button.config(state="normal")
+        self.apply_selected_button.config(state="normal")
+        self.apply_all_button.config(state="normal")
+        self.set_status(f"Status: Loaded {len(self.df)} rows.")
+
+    def refresh_list(self):
+        self.listbox.delete(0, tk.END)
+        for _, row in self.df.iterrows():
+            title = row.get("title", "")
+            vid = row.get("video_id", "")
+            status = row.get("status", "")
+            prefix = f"[{status}] " if status else ""
+            self.listbox.insert(tk.END, f"{prefix}{title} ({vid})")
+
+    def on_select(self, _event):
+        selection = self.listbox.curselection()
+        if not selection:
+            return
+        index = selection[0]
+        row = self.df.iloc[index]
+        self._show_thumbnail(row)
+        for key in self.field_vars:
+            self.field_vars[key].set(str(row.get(key, "")))
+
+    def _show_thumbnail(self, row):
+        thumb_path = str(row.get("thumbnail_path", "")).strip()
+        thumb_url = str(row.get("thumbnail_url", "")).strip()
+        img = None
+        if thumb_path and os.path.exists(thumb_path):
+            try:
+                img = Image.open(thumb_path)
+            except OSError:
+                img = None
+        elif thumb_url:
+            try:
+                with urlopen(thumb_url, timeout=5) as resp:
+                    data = resp.read()
+                img = Image.open(io.BytesIO(data))
+            except Exception:
+                img = None
+
+        if img:
+            img = img.resize((320, 180))
+            self._thumb_image = ImageTk.PhotoImage(img)
+            self.thumb_label.config(image=self._thumb_image)
+        else:
+            self.thumb_label.config(image="")
+
+    def _add_field(self, parent, name, row, multiline=False):
+        ttk.Label(parent, text=name).grid(row=row, column=0, sticky="w", pady=2)
+        if multiline:
+            text = tk.Text(parent, height=4, width=40)
+            text.grid(row=row, column=1, sticky="we", pady=2)
+            var = tk.StringVar()
+            self.field_vars[name] = var
+
+            def sync_from_var(*_):
+                if text.get("1.0", tk.END).strip() != var.get():
+                    text.delete("1.0", tk.END)
+                    text.insert(tk.END, var.get())
+
+            def sync_from_text(_event=None):
+                var.set(text.get("1.0", tk.END).strip())
+
+            var.trace_add("write", lambda *_: sync_from_var())
+            text.bind("<KeyRelease>", sync_from_text)
+        else:
+            var = tk.StringVar()
+            self.field_vars[name] = var
+            entry = ttk.Entry(parent, textvariable=var, width=50)
+            entry.grid(row=row, column=1, sticky="we", pady=2)
+
+    def save_row(self):
+        selection = self.listbox.curselection()
+        if not selection:
+            return
+        index = selection[0]
+        for key, var in self.field_vars.items():
+            self.df.at[index, key] = var.get().strip()
+        # mark as ready for update
+        self.df.at[index, "status"] = "READY_TO_UPDATE"
+        if self.excel_path:
+            self.df.to_excel(self.excel_path, index=False)
+        self.refresh_list()
+        self.set_status("Status: Row saved to Excel.")
+
+    def apply_selected(self):
+        selection = self.listbox.curselection()
+        if not selection:
+            return
+        index = selection[0]
+        self.apply_row(index)
+
+    def apply_pending(self):
+        for idx, row in self.df.iterrows():
+            if str(row.get("status", "")).upper() == "READY_TO_UPDATE":
+                self.apply_row(idx)
+
+    def apply_row(self, index):
+        row = self.df.iloc[index]
+        video_id = str(row.get("video_id", "")).strip()
+        if not video_id:
+            self.df.at[index, "status"] = "FAILED"
+            self.df.at[index, "error_message"] = "Missing video_id"
+            self.refresh_list()
+            return
+
+        action = str(row.get("action", "")).strip().lower()
+        if action in ("skip", "ignored"):
+            return
+
+        try:
+            # update metadata
+            if action in ("", "update", "update_metadata", "update_all"):
+                snippet = {
+                    "title": str(row.get("title", "")),
+                    "description": str(row.get("description", "")),
+                    "categoryId": str(row.get("category_id", "")) or "22",
+                }
+                tags = str(row.get("tags", "")).strip()
+                if tags:
+                    snippet["tags"] = [t.strip() for t in tags.split(",") if t.strip()]
+                default_language = str(row.get("default_language", "")).strip()
+                if default_language:
+                    snippet["defaultLanguage"] = default_language
+                default_audio = str(row.get("default_audio_language", "")).strip()
+                if default_audio:
+                    snippet["defaultAudioLanguage"] = default_audio
+
+                status = {}
+                privacy = str(row.get("privacy_status", "")).strip()
+                if privacy:
+                    status["privacyStatus"] = privacy
+                license_value = str(row.get("license", "")).strip()
+                if license_value:
+                    status["license"] = license_value
+                embeddable = str(row.get("embeddable", "")).strip()
+                if embeddable:
+                    status["embeddable"] = embeddable.lower() in ("true", "1", "yes")
+                made_for_kids = str(row.get("self_declared_made_for_kids", "")).strip()
+                if made_for_kids:
+                    status["selfDeclaredMadeForKids"] = made_for_kids.lower() in ("true", "1", "yes")
+
+                body = {"id": video_id, "snippet": snippet, "status": status}
+                self.youtube.videos().update(part="snippet,status", body=body).execute()
+
+            # update thumbnail
+            thumb_path = str(row.get("thumbnail_path", "")).strip()
+            if thumb_path and action in ("", "update", "update_thumbnail", "update_all"):
+                from googleapiclient.http import MediaFileUpload
+
+                media = MediaFileUpload(thumb_path)
+                self.youtube.thumbnails().set(videoId=video_id, media_body=media).execute()
+
+            self.df.at[index, "status"] = "UPDATED"
+            self.df.at[index, "error_message"] = ""
+        except Exception as err:
+            self.df.at[index, "status"] = "FAILED"
+            self.df.at[index, "error_message"] = str(err)
+        if self.excel_path:
+            self.df.to_excel(self.excel_path, index=False)
+        self.refresh_list()
