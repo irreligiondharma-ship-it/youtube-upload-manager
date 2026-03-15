@@ -83,10 +83,11 @@ class ChannelManagerGUI:
         self._add_field(form, "thumbnail_path", 6)
         self._add_field(form, "playlist_id", 7)
         self._add_field(form, "playlist_name", 8)
-        self._add_field(form, "action", 9)
+        self._add_action_field(form, 9)
+        self._add_field(form, "playlist_action", 10)
 
         self.save_row_button = ttk.Button(form, text="Save Row (Excel)", command=self.save_row)
-        self.save_row_button.grid(row=10, column=1, sticky="e", pady=(8, 0))
+        self.save_row_button.grid(row=11, column=1, sticky="e", pady=(8, 0))
 
         bottom = ttk.Frame(self.dialog, padding=8)
         bottom.pack(fill="x")
@@ -242,6 +243,19 @@ class ChannelManagerGUI:
             self.field_vars[name] = var
             entry = ttk.Entry(parent, textvariable=var, width=50)
             entry.grid(row=row, column=1, sticky="we", pady=2)
+
+    def _add_action_field(self, parent, row):
+        ttk.Label(parent, text="action").grid(row=row, column=0, sticky="w", pady=2)
+        var = tk.StringVar()
+        self.field_vars["action"] = var
+        combo = ttk.Combobox(
+            parent,
+            textvariable=var,
+            values=["", "update_metadata", "update_thumbnail", "update_all", "skip"],
+            state="readonly",
+            width=47,
+        )
+        combo.grid(row=row, column=1, sticky="we", pady=2)
 
     def save_row(self):
         selection = self.listbox.curselection()
