@@ -67,6 +67,10 @@ class ChannelManagerGUI:
         self.playlist_id_to_display = {}
         self._playlist_combo = None
         self.selected_index = None
+        self.scope_youtube = "https://www.googleapis.com/auth/youtube"
+        self.scope_force_ssl = "https://www.googleapis.com/auth/youtube.force-ssl"
+        self.scope_upload = "https://www.googleapis.com/auth/youtube.upload"
+        self.scope_readonly = "https://www.googleapis.com/auth/youtube.readonly"
 
         self.dialog = tk.Toplevel(root)
         self.dialog.title("Channel Manager")
@@ -464,12 +468,63 @@ class ChannelManagerGUI:
         if not selection:
             return
         index = selection[0]
-        self.apply_row(index)
+        ok, msg = self.apply_row(index)
+        if ok:
+            messagebox.showinfo("Success", msg, parent=self.dialog)
+        else:
+            messagebox.showerror("Failed", msg, parent=self.dialog)
 
     def apply_pending(self):
+        total = 0
+        success = 0
+        failed = 0
+        first_error = ""
         for idx, row in self.df.iterrows():
             if str(row.get("status", "")).upper() == "READY_TO_UPDATE":
-                self.apply_row(idx)
+                total += 1
+                ok, msg = self.apply_row(idx)
+                if ok:
+                    success += 1
+                else:
+                    failed += 1
+                    if not first_error:
+                        first_error = msg
+        if total == 0:
+            messagebox.showinfo("Apply Pending", "No rows marked READY_TO_UPDATE.", parent=self.dialog)
+        elif failed:
+            messagebox.showerror(
+                "Apply Pending",
+                f"Completed with errors. Success: {success}, Failed: {failed}.\nFirst error: {first_error}",
+                parent=self.dialog,
+            )
+        else:
+            messagebox.showinfo("Apply Pending", f"All done. Success: {success}.", parent=self.dialog)
+
+    def _get_scopes(self):
+        creds = None
+        if self.youtube is not None:
+            http = getattr(self.youtube, "_http", None)
+            if http is not None:
+                creds = getattr(http, "credentials", None)
+            if creds is None:
+                creds = getattr(self.youtube, "credentials", None)
+        scopes = getattr(creds, "scopes", None) or getattr(creds, "_scopes", None) or []
+        return set(scopes)
+
+    def _require_scopes(self, required_any, action_label):
+        scopes = self._get_scopes()
+        if not required_any:
+            return ""
+        if not scopes or not any(scope in scopes for scope in required_any):
+            required_text = ", ".join(required_any)
+            current_text = ", ".join(sorted(scopes)) if scopes else "unknown"
+            return (
+                f"Insufficient permission for {action_label}.\n"
+                f"Required: {required_text}\n"
+                f"Current: {current_text}\n"
+                "Please re-login with required scopes."
+            )
+        return ""
 
     def apply_row(self, index):
         row = self.df.iloc[index]
@@ -478,11 +533,11 @@ class ChannelManagerGUI:
             self.df.at[index, "status"] = "FAILED"
             self.df.at[index, "error_message"] = "Missing video_id"
             self.refresh_list()
-            return
+            return False, "Missing video_id"
 
         action = str(row.get("action", "")).strip().lower()
         if action in ("skip", "ignored"):
-            return
+            return True, f"Skipped {video_id}."
 
         try:
             playlist_action = str(row.get("playlist_action", "")).strip().lower()
@@ -490,6 +545,9 @@ class ChannelManagerGUI:
 
             # update metadata
             if action in ("", "update", "update_metadata", "update_all"):
+                msg = self._require_scopes([self.scope_youtube, self.scope_force_ssl], "metadata update")
+                if msg:
+                    raise PermissionError(msg)
                 snippet = {
                     "title": str(row.get("title", "")),
                     "description": str(row.get("description", "")),
@@ -525,13 +583,24 @@ class ChannelManagerGUI:
             # update thumbnail
             thumb_path = str(row.get("thumbnail_path", "")).strip()
             if thumb_path and action in ("", "update", "update_thumbnail", "update_all"):
+                msg = self._require_scopes(
+                    [self.scope_upload, self.scope_youtube, self.scope_force_ssl],
+                    "thumbnail update",
+                )
+                if msg:
+                    raise PermissionError(msg)
                 from googleapiclient.http import MediaFileUpload
 
                 media = MediaFileUpload(thumb_path)
                 self.youtube.thumbnails().set(videoId=video_id, media_body=media).execute()
+            elif action in ("update_thumbnail",) and not thumb_path:
+                raise ValueError("thumbnail_path is empty for update_thumbnail action.")
 
             # update playlist
             if playlist_action and playlist_id:
+                msg = self._require_scopes([self.scope_youtube, self.scope_force_ssl], "playlist update")
+                if msg:
+                    raise PermissionError(msg)
                 if playlist_action in ("add", "insert"):
                     body = {
                         "snippet": {
@@ -560,12 +629,17 @@ class ChannelManagerGUI:
                             break
                 else:
                     raise ValueError("Invalid playlist_action. Use add/remove.")
+            elif playlist_action and not playlist_id:
+                raise ValueError("playlist_id is required when playlist_action is set.")
 
             self.df.at[index, "status"] = "UPDATED"
             self.df.at[index, "error_message"] = ""
+            success_msg = f"Updated {video_id}."
         except Exception as err:
             self.df.at[index, "status"] = "FAILED"
             self.df.at[index, "error_message"] = str(err)
+            success_msg = str(err)
         if self.excel_path:
             self.df.to_excel(self.excel_path, index=False)
         self.refresh_list()
+        return self.df.at[index, "status"] == "UPDATED", success_msg
