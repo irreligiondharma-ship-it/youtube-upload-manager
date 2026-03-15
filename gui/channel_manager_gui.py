@@ -11,6 +11,50 @@ from PIL import Image, ImageTk
 from core.channel_manager import FULL_COLUMNS, ensure_columns, fetch_channel_videos
 
 
+class _ScrollableFrame(ttk.Frame):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.canvas = tk.Canvas(self, highlightthickness=0)
+        self.vscroll = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.vscroll.set)
+
+        self.inner = ttk.Frame(self.canvas)
+        self._window_id = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
+
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.vscroll.pack(side="right", fill="y")
+
+        self.inner.bind("<Configure>", self._on_frame_configure)
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
+        self.inner.bind("<Enter>", self._bind_mousewheel)
+        self.inner.bind("<Leave>", self._unbind_mousewheel)
+
+    def _on_frame_configure(self, _event=None):
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def _on_canvas_configure(self, event):
+        self.canvas.itemconfigure(self._window_id, width=event.width)
+
+    def _bind_mousewheel(self, _event):
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        self.canvas.bind_all("<Button-4>", self._on_mousewheel)
+        self.canvas.bind_all("<Button-5>", self._on_mousewheel)
+
+    def _unbind_mousewheel(self, _event):
+        self.canvas.unbind_all("<MouseWheel>")
+        self.canvas.unbind_all("<Button-4>")
+        self.canvas.unbind_all("<Button-5>")
+
+    def _on_mousewheel(self, event):
+        if getattr(event, "num", None) == 4:
+            delta = -1
+        elif getattr(event, "num", None) == 5:
+            delta = 1
+        else:
+            delta = int(-1 * (event.delta / 120))
+        self.canvas.yview_scroll(delta, "units")
+
+
 class ChannelManagerGUI:
     def __init__(self, root, youtube_client, account_name=""):
         self.root = root
@@ -63,15 +107,18 @@ class ChannelManagerGUI:
         right = ttk.Frame(body)
         right.pack(side="right", fill="both", expand=True, padx=(8, 0))
 
-        preview = ttk.LabelFrame(right, text="Preview", padding=6)
+        right_scroll = _ScrollableFrame(right)
+        right_scroll.pack(fill="both", expand=True)
+
+        preview = ttk.LabelFrame(right_scroll.inner, text="Preview", padding=6)
         preview.pack(fill="x")
         self.thumb_label = ttk.Label(preview)
         self.thumb_label.pack()
         self._thumb_image = None
 
-        form = ttk.LabelFrame(right, text="Edit Fields", padding=6)
-        form.pack(fill="both", expand=True, pady=(8, 0))
+        form = ttk.LabelFrame(right_scroll.inner, text="Edit Fields", padding=6)
         form.columnconfigure(1, weight=1)
+        form.pack(fill="x", pady=(8, 0))
 
         self.field_vars = {}
         self._add_field(form, "title", 0)
@@ -237,7 +284,7 @@ class ChannelManagerGUI:
     def _add_field(self, parent, name, row, multiline=False):
         ttk.Label(parent, text=name).grid(row=row, column=0, sticky="w", pady=2)
         if multiline:
-            text = tk.Text(parent, height=4, width=40)
+            text = tk.Text(parent, height=4)
             text.grid(row=row, column=1, sticky="we", pady=2)
             var = tk.StringVar()
             self.field_vars[name] = var
@@ -255,7 +302,7 @@ class ChannelManagerGUI:
         else:
             var = tk.StringVar()
             self.field_vars[name] = var
-            entry = ttk.Entry(parent, textvariable=var, width=50)
+            entry = ttk.Entry(parent, textvariable=var)
             entry.grid(row=row, column=1, sticky="we", pady=2)
 
     def _add_action_field(self, parent, row):
@@ -267,7 +314,6 @@ class ChannelManagerGUI:
             textvariable=var,
             values=["update_all", "update_metadata", "update_thumbnail", "skip"],
             state="readonly",
-            width=47,
         )
         combo.grid(row=row, column=1, sticky="we", pady=2)
         var.set("update_all")
@@ -281,7 +327,6 @@ class ChannelManagerGUI:
             textvariable=var,
             values=values,
             state="readonly",
-            width=47,
         )
         combo.grid(row=row, column=1, sticky="we", pady=2)
 
@@ -289,7 +334,7 @@ class ChannelManagerGUI:
         ttk.Label(parent, text=name).grid(row=row, column=0, sticky="w", pady=2)
         var = tk.StringVar()
         self.field_vars[name] = var
-        entry = ttk.Entry(parent, textvariable=var, width=38)
+        entry = ttk.Entry(parent, textvariable=var)
         entry.grid(row=row, column=1, sticky="we", pady=2)
 
         def browse():
