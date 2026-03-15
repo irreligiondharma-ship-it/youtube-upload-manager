@@ -66,6 +66,7 @@ class ChannelManagerGUI:
         self.playlist_by_display = {}
         self.playlist_id_to_display = {}
         self._playlist_combo = None
+        self.selected_index = None
 
         self.dialog = tk.Toplevel(root)
         self.dialog.title("Channel Manager")
@@ -104,7 +105,7 @@ class ChannelManagerGUI:
         left = ttk.Frame(body)
         left.pack(side="left", fill="both", expand=True)
 
-        self.listbox = tk.Listbox(left)
+        self.listbox = tk.Listbox(left, exportselection=False)
         self.listbox.pack(fill="both", expand=True)
         self.listbox.bind("<<ListboxSelect>>", self.on_select)
 
@@ -249,6 +250,7 @@ class ChannelManagerGUI:
         if not selection:
             return
         index = selection[0]
+        self.selected_index = index
         row = self.df.iloc[index]
         self._show_thumbnail(row)
         defaults = {
@@ -424,9 +426,14 @@ class ChannelManagerGUI:
 
     def save_row(self):
         selection = self.listbox.curselection()
-        if not selection:
+        if selection:
+            index = selection[0]
+            self.selected_index = index
+        elif self.selected_index is not None:
+            index = self.selected_index
+        else:
+            messagebox.showinfo("No Selection", "Please select a row first.", parent=self.dialog)
             return
-        index = selection[0]
         playlist_raw = self.field_vars.get("playlist_id", tk.StringVar()).get().strip()
         playlist_id = self._normalize_playlist_id(playlist_raw)
         if playlist_id and playlist_raw in self.playlist_by_display:
@@ -443,8 +450,11 @@ class ChannelManagerGUI:
         self.df.at[index, "status"] = "READY_TO_UPDATE"
         if self.excel_path:
             self.df.to_excel(self.excel_path, index=False)
+        else:
+            self.set_status("Status: Row saved in memory. Export to Excel to persist.")
         self.refresh_list()
-        self.set_status("Status: Row saved to Excel.")
+        if self.excel_path:
+            self.set_status("Status: Row saved to Excel.")
 
     def apply_selected(self):
         selection = self.listbox.curselection()
