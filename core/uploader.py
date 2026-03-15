@@ -235,19 +235,32 @@ class Uploader:
                             raise err
                         logging.warning("Retrying upload...")
 
+                warnings = []
                 if thumbnail_path:
-                    self.youtube_service.upload_thumbnail(video_id, thumbnail_path)
+                    try:
+                        self.youtube_service.upload_thumbnail(video_id, thumbnail_path)
+                    except Exception as err:
+                        warnings.append(f"Thumbnail upload failed: {err}")
 
                 if playlist_id:
-                    self.youtube_service.add_video_to_playlist(video_id, playlist_id)
+                    try:
+                        self.youtube_service.add_video_to_playlist(video_id, playlist_id)
+                    except Exception as err:
+                        warnings.append(f"Playlist add failed: {err}")
 
-                self.excel.mark_uploaded(index, video_id)
+                status_note = ""
+                if warnings:
+                    status_note = " | ".join(warnings)
+                    self.excel.mark_uploaded_with_warning(index, video_id, status_note)
+                else:
+                    self.excel.mark_uploaded(index, video_id)
                 self.save_state(current_index=None)
                 self._notify_status(
                     "item_done",
                     index=int(index),
                     video_id=str(video_id),
                     title=str(row.get("title", "")).strip(),
+                    warning=status_note,
                 )
 
             except Exception as err:

@@ -56,6 +56,11 @@ class Validator:
         if not absolute_path:
             return None
 
+        ext = os.path.splitext(absolute_path)[1].lower()
+        if ext not in {".jpg", ".jpeg", ".png"}:
+            raise ValueError("Thumbnail must be a JPG or PNG image.")
+        if os.path.getsize(absolute_path) <= 0:
+            raise ValueError("Thumbnail file is empty or corrupted.")
         return absolute_path
 
     # ===============================

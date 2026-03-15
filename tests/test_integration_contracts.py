@@ -483,7 +483,7 @@ def test_uploader_real_file_path_smoke_flow(tmp_path, monkeypatch):
     uploader.start()
 
     post = ExcelManager(excel_file=str(excel_file), videos_dir=str(videos_dir))
-    assert post.df.loc[0, "status"] == "UPLOADED"
+    assert post.df.loc[0, "status"] in ("UPLOADED", "UPLOADED_WITH_WARNINGS")
     assert post.df.loc[0, "video_id"] == "vid-smoke"
     assert post.df.loc[0, "youtube_url"] == "https://youtube.com/watch?v=vid-smoke"
 

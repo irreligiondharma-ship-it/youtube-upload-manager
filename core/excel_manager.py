@@ -131,6 +131,16 @@ class ExcelManager:
         self.df.at[index, "error_message"] = ""
         self.save()
 
+    def mark_uploaded_with_warning(self, index, video_id, warning_message):
+        youtube_url = f"https://youtube.com/watch?v={video_id}"
+
+        self.df.at[index, "status"] = "UPLOADED_WITH_WARNINGS"
+        self.df.at[index, "video_id"] = str(video_id)
+        self.df.at[index, "youtube_url"] = youtube_url
+        self.df.at[index, "uploaded_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.df.at[index, "error_message"] = str(warning_message)
+        self.save()
+
     def mark_failed(self, index, error_message):
         self.df.at[index, "status"] = "FAILED"
         self.df.at[index, "error_message"] = str(error_message)
@@ -171,9 +181,12 @@ class ExcelManager:
         if not target:
             return False
 
-        uploaded = self.df[self.df["status"] == "UPLOADED"]
+        uploaded = self.df[self.df["status"].isin(["UPLOADED", "UPLOADED_WITH_WARNINGS"])]
         for existing_path in uploaded["video_path"].tolist():
             if self._normalize_video_path(existing_path) == target:
+                return True
+        for video_id in uploaded["video_id"].tolist():
+            if str(video_id).strip():
                 return True
         return False
 
