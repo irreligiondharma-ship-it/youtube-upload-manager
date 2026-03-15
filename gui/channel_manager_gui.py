@@ -62,6 +62,10 @@ class ChannelManagerGUI:
         self.account_name = account_name or "Unknown"
         self.videos = []
         self._busy = False
+        self.playlist_options = []
+        self.playlist_by_display = {}
+        self.playlist_id_to_display = {}
+        self._playlist_combo = None
 
         self.dialog = tk.Toplevel(root)
         self.dialog.title("Channel Manager")
@@ -127,7 +131,7 @@ class ChannelManagerGUI:
         self._add_dropdown_field(form, "privacy_status", 3, ["public", "private", "unlisted"])
         self._add_field(form, "category_id", 4)
         self._add_file_field(form, "thumbnail_path", 5)
-        self._add_field(form, "playlist_id", 6)
+        self._add_playlist_field(form, 6)
         self._add_field(form, "playlist_name", 7)
         self._add_action_field(form, 8)
         self._add_dropdown_field(form, "playlist_action", 9, ["", "add", "remove"])
@@ -146,6 +150,7 @@ class ChannelManagerGUI:
 
         self.df = pd.DataFrame(columns=FULL_COLUMNS)
         self.excel_path = ""
+        self.load_playlists_async()
 
     def set_status(self, text):
         self.status_label.config(text=text)
@@ -185,6 +190,7 @@ class ChannelManagerGUI:
         self.apply_selected_button.config(state="normal" if len(self.df) else "disabled")
         self.apply_all_button.config(state="normal" if len(self.df) else "disabled")
         self._busy = False
+        self.load_playlists_async()
 
     def on_fetch_error(self, err):
         self.set_status("Status: Error")
@@ -227,6 +233,7 @@ class ChannelManagerGUI:
         self.apply_selected_button.config(state="normal")
         self.apply_all_button.config(state="normal")
         self.set_status(f"Status: Loaded {len(self.df)} rows.")
+        self.load_playlists_async()
 
     def refresh_list(self):
         self.listbox.delete(0, tk.END)
@@ -255,6 +262,11 @@ class ChannelManagerGUI:
             value = str(row.get(key, "")).strip()
             if not value and key in defaults:
                 value = defaults[key]
+            if key == "playlist_id":
+                value = self.playlist_id_to_display.get(value, value)
+            if key == "playlist_name" and not value:
+                mapped = self.playlist_by_display.get(self.field_vars.get("playlist_id", tk.StringVar()).get(), {})
+                value = mapped.get("name", value)
             self.field_vars[key].set(value)
 
     def _show_thumbnail(self, row):
@@ -318,6 +330,15 @@ class ChannelManagerGUI:
         combo.grid(row=row, column=1, sticky="we", pady=2)
         var.set("update_all")
 
+    def _add_playlist_field(self, parent, row):
+        ttk.Label(parent, text="playlist_id").grid(row=row, column=0, sticky="w", pady=2)
+        var = tk.StringVar()
+        self.field_vars["playlist_id"] = var
+        combo = ttk.Combobox(parent, textvariable=var, values=self.playlist_options, state="normal")
+        combo.grid(row=row, column=1, sticky="we", pady=2)
+        combo.bind("<<ComboboxSelected>>", lambda _e: self._sync_playlist_name())
+        self._playlist_combo = combo
+
     def _add_dropdown_field(self, parent, name, row, values):
         ttk.Label(parent, text=name).grid(row=row, column=0, sticky="w", pady=2)
         var = tk.StringVar()
@@ -347,13 +368,77 @@ class ChannelManagerGUI:
 
         ttk.Button(parent, text="Browse", command=browse).grid(row=row, column=2, padx=4)
 
+    def _normalize_playlist_id(self, value: str) -> str:
+        value = value.strip()
+        info = self.playlist_by_display.get(value)
+        if info:
+            return info["id"]
+        return value
+
+    def _sync_playlist_name(self):
+        display = self.field_vars.get("playlist_id", tk.StringVar()).get().strip()
+        info = self.playlist_by_display.get(display)
+        if info:
+            self.field_vars.get("playlist_name", tk.StringVar()).set(info["name"])
+
+    def load_playlists_async(self):
+        if not self.youtube:
+            return
+
+        def run():
+            try:
+                playlists = []
+                page_token = None
+                while True:
+                    resp = self.youtube.playlists().list(
+                        part="snippet",
+                        mine=True,
+                        maxResults=50,
+                        pageToken=page_token,
+                    ).execute()
+                    for item in resp.get("items", []):
+                        pid = str(item.get("id", ""))
+                        name = str(item.get("snippet", {}).get("title", ""))
+                        if pid:
+                            playlists.append((pid, name))
+                    page_token = resp.get("nextPageToken")
+                    if not page_token:
+                        break
+                self.root.after(0, lambda: self._set_playlists(playlists))
+            except Exception:
+                pass
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _set_playlists(self, playlists):
+        self.playlist_options = []
+        self.playlist_by_display = {}
+        self.playlist_id_to_display = {}
+        for pid, name in playlists:
+            display = f"{name} | {pid}"
+            self.playlist_options.append(display)
+            self.playlist_by_display[display] = {"id": pid, "name": name}
+            self.playlist_id_to_display[pid] = display
+        if self._playlist_combo is not None:
+            self._playlist_combo["values"] = self.playlist_options
+
     def save_row(self):
         selection = self.listbox.curselection()
         if not selection:
             return
         index = selection[0]
+        playlist_raw = self.field_vars.get("playlist_id", tk.StringVar()).get().strip()
+        playlist_id = self._normalize_playlist_id(playlist_raw)
+        if playlist_id and playlist_raw in self.playlist_by_display:
+            self.field_vars.get("playlist_name", tk.StringVar()).set(
+                self.playlist_by_display[playlist_raw]["name"]
+            )
+
         for key, var in self.field_vars.items():
-            self.df.at[index, key] = var.get().strip()
+            if key == "playlist_id":
+                self.df.at[index, key] = playlist_id
+            else:
+                self.df.at[index, key] = var.get().strip()
         # mark as ready for update
         self.df.at[index, "status"] = "READY_TO_UPDATE"
         if self.excel_path:
@@ -388,7 +473,7 @@ class ChannelManagerGUI:
 
         try:
             playlist_action = str(row.get("playlist_action", "")).strip().lower()
-            playlist_id = str(row.get("playlist_id", "")).strip()
+            playlist_id = self._normalize_playlist_id(str(row.get("playlist_id", "")).strip())
 
             # update metadata
             if action in ("", "update", "update_metadata", "update_all"):
@@ -443,15 +528,23 @@ class ChannelManagerGUI:
                     }
                     self.youtube.playlistItems().insert(part="snippet", body=body).execute()
                 elif playlist_action in ("remove", "delete"):
-                    existing = self.youtube.playlistItems().list(
-                        part="id",
-                        playlistId=playlist_id,
-                        maxResults=50,
-                    ).execute()
-                    for item in existing.get("items", []):
-                        item_id = item.get("id")
-                        if item_id:
-                            self.youtube.playlistItems().delete(id=item_id).execute()
+                    page_token = None
+                    while True:
+                        existing = self.youtube.playlistItems().list(
+                            part="id,contentDetails",
+                            playlistId=playlist_id,
+                            maxResults=50,
+                            pageToken=page_token,
+                        ).execute()
+                        for item in existing.get("items", []):
+                            content = item.get("contentDetails", {})
+                            if str(content.get("videoId", "")) == video_id:
+                                item_id = item.get("id")
+                                if item_id:
+                                    self.youtube.playlistItems().delete(id=item_id).execute()
+                        page_token = existing.get("nextPageToken")
+                        if not page_token:
+                            break
                 else:
                     raise ValueError("Invalid playlist_action. Use add/remove.")
 
