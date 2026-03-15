@@ -470,7 +470,7 @@ class ChannelManagerGUI:
         if not selection:
             return
         index = selection[0]
-        ok, msg = self.apply_row(index)
+        ok, msg, err_code = self.apply_row(index)
         if ok:
             messagebox.showinfo("Success", msg, parent=self.dialog)
         else:
