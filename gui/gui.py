@@ -552,8 +552,11 @@ class YouTubeUploadGUI:
                 index = payload.get("index")
                 title = payload.get("title", "")
                 video_id = payload.get("video_id", "")
+                warning = payload.get("warning", "")
                 self.current_video_progress.configure(value=100)
                 self.log(f"Uploaded row {index}: {title} ({video_id})")
+                if warning:
+                    self.log(f"Warning row {index}: {warning}")
             elif event == "item_failed":
                 index = payload.get("index")
                 title = payload.get("title", "")

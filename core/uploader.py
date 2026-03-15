@@ -201,8 +201,12 @@ class Uploader:
 
                 self.excel.mark_uploading(index)
 
+                warnings = []
                 video_path = self.validator.validate_video(row["video_path"])
-                thumbnail_path = self.validator.validate_thumbnail(row["thumbnail_path"])
+                thumbnail_raw = row.get("thumbnail_path", "")
+                thumbnail_path = self.validator.validate_thumbnail(thumbnail_raw)
+                if thumbnail_raw and str(thumbnail_raw).strip() and not thumbnail_path:
+                    warnings.append(f"Thumbnail file not found: {thumbnail_raw}")
                 title = self.validator.validate_title(row["title"])
                 description = self.validator.validate_description(row["description"])
                 tags = self.validator.validate_tags(row["tags"])
@@ -235,7 +239,6 @@ class Uploader:
                             raise err
                         logging.warning("Retrying upload...")
 
-                warnings = []
                 if thumbnail_path:
                     try:
                         self.youtube_service.upload_thumbnail(video_id, thumbnail_path)
