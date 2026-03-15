@@ -415,7 +415,7 @@ class YouTubeUploadGUI:
             messagebox.showinfo("No Pending Rows", "No pending uploads found in queue.")
             return
 
-        if not self.ensure_excel_closed_before_upload():
+        if not self.warn_if_excel_open():
             return
 
         self.upload_worker = UploadWorker(
@@ -613,46 +613,17 @@ class YouTubeUploadGUI:
         except OSError:
             return True
 
-    def ensure_excel_closed_before_upload(self):
+    def warn_if_excel_open(self):
         excel_path = self.selected_excel_file
         if not self.is_file_locked_for_write(excel_path):
             return True
 
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Excel File In Use")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        dialog.resizable(False, False)
-        dialog.protocol("WM_DELETE_WINDOW", lambda: None)
-        dialog.bind("<Escape>", lambda _e: None)
-
-        frame = ttk.Frame(dialog, padding=12)
-        frame.pack(fill="both", expand=True)
-
-        message_var = tk.StringVar(
-            value=(
-                "Please close the Excel file before starting upload.\n"
-                "After closing it, click OK."
-            )
+        return messagebox.askyesno(
+            "Excel File Open",
+            "The Excel file appears to be open.\n"
+            "Upload can continue, but status updates may not save until the file is closed.\n"
+            "Do you want to continue?",
         )
-        ttk.Label(frame, textvariable=message_var, justify="left").pack(anchor="w")
-
-        allowed = {"ready": False}
-
-        def on_ok():
-            if self.is_file_locked_for_write(excel_path):
-                message_var.set(
-                    "Excel file is still open.\n"
-                    "Please close the file and click OK again."
-                )
-                return
-            allowed["ready"] = True
-            dialog.destroy()
-
-        ttk.Button(frame, text="OK", command=on_ok).pack(anchor="e", pady=(10, 0))
-
-        self.root.wait_window(dialog)
-        return allowed["ready"]
 
     def log(self, message):
         self.log_text.insert(tk.END, message + "\n")

@@ -31,6 +31,7 @@ class ExcelManager:
         self.videos_dir = videos_dir
         self.df = None
         self._last_mtime = None
+        self._pending_save = False
         self.load_excel(force=True)
 
     # ===============================
@@ -52,9 +53,25 @@ class ExcelManager:
             self.save()
         else:
             try:
-                self.df = pd.read_excel(self.excel_file, dtype=str)
+                ext = os.path.splitext(self.excel_file)[1].lower()
+                engine = None
+                if ext in (".xlsx", ".xlsm", ".xltx", ".xltm"):
+                    engine = "openpyxl"
+                elif ext == ".xls":
+                    engine = "xlrd"
+
+                if engine:
+                    self.df = pd.read_excel(self.excel_file, dtype=str, engine=engine)
+                else:
+                    # Try openpyxl as a sensible default
+                    self.df = pd.read_excel(self.excel_file, dtype=str, engine="openpyxl")
             except (PermissionError, OSError) as err:
                 logging.warning("Excel read skipped due to transient file access issue: %s", err)
+                return False
+            except (ValueError, ImportError) as err:
+                logging.warning("Excel read failed: %s", err)
+                if self.df is None:
+                    self.df = pd.DataFrame(columns=REQUIRED_COLUMNS)
                 return False
             self._ensure_columns()
 
@@ -91,9 +108,14 @@ class ExcelManager:
     # Save Excel
     # ===============================
     def save(self):
-        self.df.to_excel(self.excel_file, index=False)
-        if os.path.exists(self.excel_file):
-            self._last_mtime = os.path.getmtime(self.excel_file)
+        try:
+            self.df.to_excel(self.excel_file, index=False)
+            if os.path.exists(self.excel_file):
+                self._last_mtime = os.path.getmtime(self.excel_file)
+            self._pending_save = False
+        except (PermissionError, OSError) as err:
+            self._pending_save = True
+            logging.warning("Excel save skipped due to file lock or access issue: %s", err)
 
     def reload(self):
         self.load_excel(force=True)
