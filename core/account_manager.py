@@ -1,9 +1,11 @@
 import os
 import json
 import logging
+import shutil
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from config.constants import (
     CREDENTIALS_FILE,
     ACCOUNTS_DIR,
@@ -39,7 +41,8 @@ class AccountManager:
             raise RuntimeError("No YouTube channel found.")
 
         channel_title = response["items"][0]["snippet"]["title"]
-        safe_name = self._sanitize_name(channel_title)
+        channel_id = response["items"][0]["id"]
+        safe_name = self._sanitize_name(channel_title, channel_id)
 
         account_path = os.path.join(ACCOUNTS_DIR, safe_name)
         os.makedirs(account_path, exist_ok=True)
@@ -68,6 +71,10 @@ class AccountManager:
             raise FileNotFoundError("token.json not found for selected account.")
 
         creds = Credentials.from_authorized_user_file(token_path, SCOPES)
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            with open(token_path, "w") as token_file:
+                token_file.write(creds.to_json())
 
         self.youtube = build("youtube", "v3", credentials=creds)
         self.current_account = account_name
@@ -75,6 +82,23 @@ class AccountManager:
         logging.info(f"Loaded account: {account_name}")
 
         return self.youtube
+
+    def remove_account(self, account_name):
+        account_path = os.path.join(ACCOUNTS_DIR, account_name)
+        if not os.path.exists(account_path):
+            raise FileNotFoundError("Account folder not found.")
+        shutil.rmtree(account_path)
+        if self.current_account == account_name:
+            self.current_account = None
+            self.youtube = None
+
+    def validate_account(self, account_name):
+        youtube = self.load_account(account_name)
+        request = youtube.channels().list(part="snippet", mine=True)
+        response = request.execute()
+        if not response.get("items"):
+            raise RuntimeError("No YouTube channel found for this account.")
+        return True
 
     def list_accounts(self):
         if not os.path.exists(ACCOUNTS_DIR):
@@ -88,5 +112,8 @@ class AccountManager:
     def get_current_account(self):
         return self.current_account
 
-    def _sanitize_name(self, name):
-        return "".join(c for c in name if c.isalnum() or c in (" ", "_", "-")).strip()
+    def _sanitize_name(self, name, channel_id=None):
+        base = "".join(c for c in name if c.isalnum() or c in (" ", "_", "-")).strip()
+        if channel_id:
+            return f"{base}__{channel_id}"
+        return base

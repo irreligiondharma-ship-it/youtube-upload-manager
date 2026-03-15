@@ -251,15 +251,26 @@ class Uploader:
                 )
 
             except Exception as err:
-                self._log_upload_error(index=index, row=row, err=err)
-                self.excel.mark_failed(index, str(err))
-                self.save_state(current_index=None)
-                self._notify_status(
-                    "item_failed",
-                    index=int(index),
-                    error=str(err),
-                    title=str(row.get("title", "")).strip(),
-                )
+                if isinstance(err, InterruptedError):
+                    reason = "Stopped by user"
+                    self.excel.mark_skipped(index, reason)
+                    self.save_state(current_index=None)
+                    self._notify_status(
+                        "item_failed",
+                        index=int(index),
+                        error=reason,
+                        title=str(row.get("title", "")).strip(),
+                    )
+                else:
+                    self._log_upload_error(index=index, row=row, err=err)
+                    self.excel.mark_failed(index, str(err))
+                    self.save_state(current_index=None)
+                    self._notify_status(
+                        "item_failed",
+                        index=int(index),
+                        error=str(err),
+                        title=str(row.get("title", "")).strip(),
+                    )
 
         logging.info("Uploader stopped.")
         self._notify_status("state_change", state="stopped")

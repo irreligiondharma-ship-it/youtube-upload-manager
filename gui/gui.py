@@ -56,6 +56,8 @@ class YouTubeUploadGUI:
 
         ttk.Button(top, text="Change Account",
                    command=self.change_account).pack(side="right", padx=5)
+        ttk.Button(top, text="Remove Account",
+                   command=self.remove_account).pack(side="right", padx=5)
         ttk.Button(top, text="Add Account",
                    command=self.add_account).pack(side="right")
 
@@ -141,8 +143,12 @@ class YouTubeUploadGUI:
         accounts = sorted(self.account_manager.list_accounts())
         if accounts:
             target = self.last_account_name if self.last_account_name in accounts else accounts[0]
-            self.account_manager.load_account(target)
-            self.account_label.config(text=f"Account: {target}")
+            try:
+                self.account_manager.validate_account(target)
+                self.account_label.config(text=f"Account: {target}")
+            except Exception:
+                self.account_label.config(text="Account: None")
+                self.show_reauth_prompt(target)
 
     def add_account(self):
         try:
@@ -154,6 +160,74 @@ class YouTubeUploadGUI:
             messagebox.showinfo("Success", f"Account added: {name}")
         except Exception as e:
             messagebox.showerror("Error", str(e))
+
+    def remove_account(self):
+        accounts = sorted(self.account_manager.list_accounts())
+        if not accounts:
+            messagebox.showwarning("No Accounts", "No accounts found.")
+            return
+
+        current = self.account_manager.get_current_account() or ""
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Remove Account")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        container = ttk.Frame(dialog, padding=10)
+        container.pack(fill="both", expand=True)
+
+        ttk.Label(container, text="Select account to remove:").grid(row=0, column=0, sticky="w")
+
+        selected = tk.StringVar(value=current if current in accounts else accounts[0])
+        combo = ttk.Combobox(
+            container,
+            textvariable=selected,
+            values=accounts,
+            state="readonly",
+            width=40,
+        )
+        combo.grid(row=1, column=0, pady=5, sticky="we")
+        combo.focus_set()
+
+        buttons = ttk.Frame(container)
+        buttons.grid(row=2, column=0, sticky="e")
+
+        def on_cancel():
+            dialog.destroy()
+
+        def on_remove():
+            choice = selected.get().strip()
+            if not choice:
+                messagebox.showerror("Invalid", "Please select an account.", parent=dialog)
+                return
+
+            confirm = messagebox.askyesno(
+                "Confirm Remove",
+                f"Remove account '{choice}' from this app?\nThis does not delete your YouTube channel.",
+                parent=dialog,
+            )
+            if not confirm:
+                return
+
+            try:
+                self.account_manager.remove_account(choice)
+                if choice == self.last_account_name:
+                    self.last_account_name = ""
+                    save_last_account("")
+                self.account_label.config(text="Account: None")
+                dialog.destroy()
+                messagebox.showinfo("Success", f"Removed account: {choice}")
+                self.load_accounts()
+            except Exception as err:
+                messagebox.showerror("Error", str(err), parent=dialog)
+
+        ttk.Button(buttons, text="Cancel", command=on_cancel).pack(side="right", padx=(5, 0))
+        ttk.Button(buttons, text="Remove", command=on_remove).pack(side="right")
+
+        dialog.bind("<Return>", lambda _e: on_remove())
+        dialog.bind("<Escape>", lambda _e: on_cancel())
 
     def change_account(self):
         accounts = sorted(self.account_manager.list_accounts())
@@ -208,14 +282,15 @@ class YouTubeUploadGUI:
                 return
 
             try:
-                self.account_manager.load_account(choice)
+                self.account_manager.validate_account(choice)
                 self.account_label.config(text=f"Account: {choice}")
                 save_last_account(choice)
                 self.last_account_name = choice
                 dialog.destroy()
                 messagebox.showinfo("Success", f"Loaded account: {choice}")
-            except Exception as err:
-                messagebox.showerror("Error", str(err), parent=dialog)
+            except Exception:
+                dialog.destroy()
+                self.show_reauth_prompt(choice)
 
         ttk.Button(buttons, text="Cancel", command=on_cancel).pack(side="right", padx=(5, 0))
         ttk.Button(buttons, text="Select", command=on_select).pack(side="right")
@@ -485,6 +560,22 @@ class YouTubeUploadGUI:
                 error = payload.get("error", "")
                 self.log(f"Failed row {index}: {title} | {error}")
         self.root.after(0, _apply)
+
+    def show_reauth_prompt(self, account_name):
+        prompt = (
+            f"Authentication for account '{account_name}' has expired or is invalid.\n"
+            "Do you want to re-login now?"
+        )
+        if messagebox.askyesno("Authentication Required", prompt):
+            try:
+                name = self.account_manager.add_account()
+                self.account_manager.load_account(name)
+                self.account_label.config(text=f"Account: {name}")
+                save_last_account(name)
+                self.last_account_name = name
+                messagebox.showinfo("Success", f"Account re-authenticated: {name}")
+            except Exception as err:
+                messagebox.showerror("Error", str(err))
 
     def select_queue_row_by_index(self, index):
         try:
