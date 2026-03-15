@@ -11,6 +11,12 @@ class YouTubeService:
     def __init__(self, youtube_client_or_token_file):
         if isinstance(youtube_client_or_token_file, str):
             creds = Credentials.from_authorized_user_file(youtube_client_or_token_file)
+            if creds.expired and creds.refresh_token:
+                from google.auth.transport.requests import Request
+
+                creds.refresh(Request())
+                with open(youtube_client_or_token_file, "w", encoding="utf-8") as f:
+                    f.write(creds.to_json())
             self.youtube: Resource = build("youtube", "v3", credentials=creds)
         else:
             # Already constructed youtube client from AccountManager

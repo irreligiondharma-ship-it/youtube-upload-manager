@@ -472,6 +472,7 @@ class YouTubeUploadGUI:
     # ===============================
     def auto_refresh(self):
         try:
+            self.excel.flush_pending_save()
             changed = self.excel.reload_if_changed()
             self.refresh_stats(reload=False)
             if changed:

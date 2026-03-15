@@ -121,6 +121,8 @@ class Validator:
             local_tz = datetime.now().astimezone().tzinfo
             dt_local = dt.replace(tzinfo=local_tz)
             dt_utc = dt_local.astimezone(timezone.utc)
+            if dt_utc <= datetime.now(timezone.utc):
+                raise ValueError("schedule_time must be in the future.")
             return dt_utc.isoformat().replace("+00:00", "Z")
         except ValueError:
             raise ValueError("Invalid schedule_time format. Use YYYY-MM-DD HH:MM")

@@ -244,12 +244,20 @@ class Uploader:
                         self.youtube_service.upload_thumbnail(video_id, thumbnail_path)
                     except Exception as err:
                         warnings.append(f"Thumbnail upload failed: {err}")
+                        try:
+                            self.youtube_service.upload_thumbnail(video_id, thumbnail_path)
+                        except Exception as err2:
+                            warnings.append(f"Thumbnail upload failed after retry: {err2}")
 
                 if playlist_id:
                     try:
                         self.youtube_service.add_video_to_playlist(video_id, playlist_id)
                     except Exception as err:
                         warnings.append(f"Playlist add failed: {err}")
+                        try:
+                            self.youtube_service.add_video_to_playlist(video_id, playlist_id)
+                        except Exception as err2:
+                            warnings.append(f"Playlist add failed after retry: {err2}")
 
                 status_note = ""
                 if warnings:

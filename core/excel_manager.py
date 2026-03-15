@@ -42,6 +42,9 @@ class ExcelManager:
         if parent_dir:
             os.makedirs(parent_dir, exist_ok=True)
 
+        if self._pending_save:
+            return False
+
         if (not force) and (self.df is not None) and os.path.exists(self.excel_file):
             current_mtime = os.path.getmtime(self.excel_file)
             if self._last_mtime is not None and current_mtime == self._last_mtime:
@@ -116,6 +119,12 @@ class ExcelManager:
         except (PermissionError, OSError) as err:
             self._pending_save = True
             logging.warning("Excel save skipped due to file lock or access issue: %s", err)
+
+    def flush_pending_save(self):
+        if not self._pending_save:
+            return False
+        self.save()
+        return not self._pending_save
 
     def reload(self):
         self.load_excel(force=True)
@@ -214,7 +223,8 @@ class ExcelManager:
     # ===============================
     def get_stats(self):
         total = len(self.df)
-        uploaded = len(self.df[self.df["status"] == "UPLOADED"])
+        status_series = self.df["status"].astype(str).str.strip().str.upper()
+        uploaded = len(self.df[status_series.isin(["UPLOADED", "UPLOADED_WITH_WARNINGS"])])
         failed = len(self.df[self.df["status"] == "FAILED"])
         pending = len(self.df[self.df["status"] == "PENDING"])
         skipped = len(self.df[self.df["status"] == "SKIPPED"])
