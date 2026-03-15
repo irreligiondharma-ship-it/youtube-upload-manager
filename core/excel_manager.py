@@ -185,9 +185,6 @@ class ExcelManager:
         for existing_path in uploaded["video_path"].tolist():
             if self._normalize_video_path(existing_path) == target:
                 return True
-        for video_id in uploaded["video_id"].tolist():
-            if str(video_id).strip():
-                return True
         return False
 
     # ===============================
