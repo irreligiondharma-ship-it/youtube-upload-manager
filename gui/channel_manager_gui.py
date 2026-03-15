@@ -282,6 +282,9 @@ class ChannelManagerGUI:
             return
 
         try:
+            playlist_action = str(row.get("playlist_action", "")).strip().lower()
+            playlist_id = str(row.get("playlist_id", "")).strip()
+
             # update metadata
             if action in ("", "update", "update_metadata", "update_all"):
                 snippet = {
@@ -323,6 +326,29 @@ class ChannelManagerGUI:
 
                 media = MediaFileUpload(thumb_path)
                 self.youtube.thumbnails().set(videoId=video_id, media_body=media).execute()
+
+            # update playlist
+            if playlist_action and playlist_id:
+                if playlist_action in ("add", "insert"):
+                    body = {
+                        "snippet": {
+                            "playlistId": playlist_id,
+                            "resourceId": {"kind": "youtube#video", "videoId": video_id},
+                        }
+                    }
+                    self.youtube.playlistItems().insert(part="snippet", body=body).execute()
+                elif playlist_action in ("remove", "delete"):
+                    existing = self.youtube.playlistItems().list(
+                        part="id",
+                        playlistId=playlist_id,
+                        maxResults=50,
+                    ).execute()
+                    for item in existing.get("items", []):
+                        item_id = item.get("id")
+                        if item_id:
+                            self.youtube.playlistItems().delete(id=item_id).execute()
+                else:
+                    raise ValueError("Invalid playlist_action. Use add/remove.")
 
             self.df.at[index, "status"] = "UPDATED"
             self.df.at[index, "error_message"] = ""
