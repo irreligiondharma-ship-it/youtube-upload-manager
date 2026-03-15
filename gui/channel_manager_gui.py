@@ -77,17 +77,21 @@ class ChannelManagerGUI:
         self._add_field(form, "title", 0)
         self._add_field(form, "description", 1, multiline=True)
         self._add_field(form, "tags", 2)
-        self._add_field(form, "privacy_status", 3)
+        self._add_dropdown_field(form, "privacy_status", 3, ["public", "private", "unlisted"])
         self._add_field(form, "category_id", 4)
-        self._add_field(form, "publish_at", 5)
-        self._add_field(form, "thumbnail_path", 6)
-        self._add_field(form, "playlist_id", 7)
-        self._add_field(form, "playlist_name", 8)
-        self._add_action_field(form, 9)
-        self._add_field(form, "playlist_action", 10)
+        self._add_file_field(form, "thumbnail_path", 5)
+        self._add_field(form, "playlist_id", 6)
+        self._add_field(form, "playlist_name", 7)
+        self._add_action_field(form, 8)
+        self._add_dropdown_field(form, "playlist_action", 9, ["", "add", "remove"])
+        self._add_dropdown_field(form, "license", 10, ["youtube", "creativeCommon"])
+        self._add_dropdown_field(form, "embeddable", 11, ["true", "false"])
+        self._add_dropdown_field(form, "self_declared_made_for_kids", 12, ["true", "false"])
+        self._add_field(form, "default_language", 13)
+        self._add_field(form, "default_audio_language", 14)
 
         self.save_row_button = ttk.Button(form, text="Save Row (Excel)", command=self.save_row)
-        self.save_row_button.grid(row=11, column=1, sticky="e", pady=(8, 0))
+        self.save_row_button.grid(row=15, column=1, sticky="e", pady=(8, 0))
 
         bottom = ttk.Frame(self.dialog, padding=8)
         bottom.pack(fill="x")
@@ -193,8 +197,18 @@ class ChannelManagerGUI:
         index = selection[0]
         row = self.df.iloc[index]
         self._show_thumbnail(row)
+        defaults = {
+            "action": "update_all",
+            "privacy_status": "private",
+            "license": "youtube",
+            "embeddable": "true",
+            "self_declared_made_for_kids": "false",
+        }
         for key in self.field_vars:
-            self.field_vars[key].set(str(row.get(key, "")))
+            value = str(row.get(key, "")).strip()
+            if not value and key in defaults:
+                value = defaults[key]
+            self.field_vars[key].set(value)
 
     def _show_thumbnail(self, row):
         thumb_path = str(row.get("thumbnail_path", "")).strip()
@@ -251,11 +265,42 @@ class ChannelManagerGUI:
         combo = ttk.Combobox(
             parent,
             textvariable=var,
-            values=["", "update_metadata", "update_thumbnail", "update_all", "skip"],
+            values=["update_all", "update_metadata", "update_thumbnail", "skip"],
             state="readonly",
             width=47,
         )
         combo.grid(row=row, column=1, sticky="we", pady=2)
+        var.set("update_all")
+
+    def _add_dropdown_field(self, parent, name, row, values):
+        ttk.Label(parent, text=name).grid(row=row, column=0, sticky="w", pady=2)
+        var = tk.StringVar()
+        self.field_vars[name] = var
+        combo = ttk.Combobox(
+            parent,
+            textvariable=var,
+            values=values,
+            state="readonly",
+            width=47,
+        )
+        combo.grid(row=row, column=1, sticky="we", pady=2)
+
+    def _add_file_field(self, parent, name, row):
+        ttk.Label(parent, text=name).grid(row=row, column=0, sticky="w", pady=2)
+        var = tk.StringVar()
+        self.field_vars[name] = var
+        entry = ttk.Entry(parent, textvariable=var, width=38)
+        entry.grid(row=row, column=1, sticky="we", pady=2)
+
+        def browse():
+            path = filedialog.askopenfilename(
+                title="Select Thumbnail",
+                filetypes=[("Image Files", "*.jpg *.jpeg *.png"), ("All Files", "*.*")],
+            )
+            if path:
+                var.set(path)
+
+        ttk.Button(parent, text="Browse", command=browse).grid(row=row, column=2, padx=4)
 
     def save_row(self):
         selection = self.listbox.curselection()
