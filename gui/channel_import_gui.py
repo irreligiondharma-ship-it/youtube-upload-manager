@@ -275,12 +275,15 @@ class ChannelImportGUI:
         self.video_items = items
         self.video_playlist_id = playlist_id
         self.video_listbox.delete(0, tk.END)
+        self.video_listbox.config(state="normal")
+        self.video_listbox.focus_set()
         for item in items:
             title = item.get("title", "")
             vid = item.get("video_id", "")
             self.video_listbox.insert(tk.END, f"{title} | {vid}")
 
         self.set_busy(False)
+        self.dialog.update_idletasks()
         self.set_status(f"Loaded {len(items)} videos.")
 
     def start_import(self):
