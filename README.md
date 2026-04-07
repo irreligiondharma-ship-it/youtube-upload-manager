@@ -8,6 +8,7 @@ A Python desktop tool to automate YouTube video uploads using the YouTube Data A
 - GUI selectors for Excel file, videos folder, and thumbnails folder
 - Optional thumbnail upload
 - Optional playlist assignment (playlist ID)
+- Import playlists from any channel and export to Excel (optional downloads)
 - Pause / Resume / Stop upload process
 - Multiple YouTube account support
 - GUI interface with preview and upload stats
