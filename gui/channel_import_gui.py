@@ -1,4 +1,5 @@
 import os
+import shutil
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -87,6 +88,14 @@ class ChannelImportGUI:
         )
         self.quality_combo.grid(row=3, column=1, sticky="w", padx=6, pady=(6, 0))
 
+        self.fast_mode_var = tk.BooleanVar(value=False)
+        self.fast_mode_check = ttk.Checkbutton(
+            options,
+            text="Fast mode (aria2c if installed)",
+            variable=self.fast_mode_var,
+        )
+        self.fast_mode_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
         options.columnconfigure(1, weight=1)
 
         status = ttk.LabelFrame(right, text="Status", padding=8)
@@ -138,7 +147,11 @@ class ChannelImportGUI:
         enabled = self.download_videos_var.get() or self.download_thumbs_var.get()
         state = "normal" if enabled else "disabled"
         self.base_folder_entry.config(state=state)
-        self.quality_combo.config(state="readonly" if self.download_videos_var.get() else "disabled")
+        download_videos = self.download_videos_var.get()
+        self.quality_combo.config(state="readonly" if download_videos else "disabled")
+        self.fast_mode_check.config(state="normal" if download_videos else "disabled")
+        if not download_videos:
+            self.fast_mode_var.set(False)
 
     def select_all(self):
         self.playlist_listbox.selection_set(0, tk.END)
@@ -194,6 +207,7 @@ class ChannelImportGUI:
         download_videos = self.download_videos_var.get()
         download_thumbs = self.download_thumbs_var.get()
         base_folder = self.base_folder_entry.get().strip()
+        use_aria2c = self.fast_mode_var.get()
 
         if download_videos and not messagebox.askyesno(
             "Permission Confirmation",
@@ -205,6 +219,15 @@ class ChannelImportGUI:
         if (download_videos or download_thumbs) and not base_folder:
             messagebox.showerror("Missing", "Select a base download folder.", parent=self.dialog)
             return
+
+        if use_aria2c and not shutil.which("aria2c"):
+            messagebox.showwarning(
+                "aria2c Not Found",
+                "Fast mode requires aria2c, but it was not found on this system.\n"
+                "Falling back to the default downloader.",
+                parent=self.dialog,
+            )
+            use_aria2c = False
 
         playlist_map = {self.playlists[i]["id"]: self.playlists[i]["title"] for i in selections}
         quality = self.quality_var.get().strip() or "best"
@@ -223,6 +246,7 @@ class ChannelImportGUI:
                     download_thumbnails=download_thumbs,
                     base_download_dir=base_folder,
                     quality=quality,
+                    use_aria2c=use_aria2c,
                     progress_callback=self.on_progress,
                     stop_event=self.stop_event,
                 )

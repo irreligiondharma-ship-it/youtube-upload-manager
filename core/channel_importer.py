@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import shutil
 from typing import Dict, Iterable, List, Optional
 from urllib.parse import urlparse
 from urllib.request import urlopen
@@ -267,7 +268,12 @@ def download_thumbnail(thumbnail_url: str, target_path: str) -> Optional[str]:
         return None
 
 
-def download_video(video_url: str, output_dir: str, quality: str) -> Optional[str]:
+def download_video(
+    video_url: str,
+    output_dir: str,
+    quality: str,
+    use_aria2c: bool = False,
+) -> Optional[str]:
     try:
         from yt_dlp import YoutubeDL
     except Exception as err:
@@ -287,7 +293,26 @@ def download_video(video_url: str, output_dir: str, quality: str) -> Optional[st
         "outtmpl": os.path.join(output_dir, "%(title).80s [%(id)s].%(ext)s"),
         "quiet": True,
         "no_warnings": True,
+        "continuedl": True,
+        "retries": 10,
+        "fragment_retries": 10,
+        "concurrent_fragment_downloads": 4,
+        "noprogress": True,
     }
+
+    if use_aria2c:
+        if shutil.which("aria2c"):
+            ydl_opts["external_downloader"] = "aria2c"
+            ydl_opts["external_downloader_args"] = [
+                "-x",
+                "8",
+                "-s",
+                "8",
+                "-k",
+                "1M",
+            ]
+        else:
+            logging.warning("aria2c not found; falling back to native downloader.")
 
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(video_url, download=True)
@@ -303,6 +328,7 @@ def import_playlists(
     download_thumbnails: bool = False,
     base_download_dir: str = "",
     quality: str = "best",
+    use_aria2c: bool = False,
     progress_callback=None,
     stop_event=None,
 ) -> int:
@@ -338,7 +364,12 @@ def import_playlists(
                 if download_videos:
                     try:
                         video_url = row.get("youtube_url", "")
-                        saved = download_video(video_url, videos_dir, quality)
+                        saved = download_video(
+                            video_url=video_url,
+                            output_dir=videos_dir,
+                            quality=quality,
+                            use_aria2c=use_aria2c,
+                        )
                         if saved:
                             row["video_path"] = saved
                             row["status"] = "DOWNLOADED"
