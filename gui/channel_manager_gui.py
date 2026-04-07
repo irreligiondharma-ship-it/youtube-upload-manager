@@ -68,6 +68,7 @@ class ChannelManagerGUI:
         self.playlist_id_to_display = {}
         self._playlist_combo = None
         self.selected_index = None
+        self.MAX_THUMBNAIL_BYTES = 10 * 1024 * 1024
         self.scope_youtube = "https://www.googleapis.com/auth/youtube"
         self.scope_force_ssl = "https://www.googleapis.com/auth/youtube.force-ssl"
         self.scope_upload = "https://www.googleapis.com/auth/youtube.upload"
@@ -158,6 +159,21 @@ class ChannelManagerGUI:
         self.df = pd.DataFrame(columns=FULL_COLUMNS)
         self.excel_path = ""
         self.load_playlists_async()
+
+    def _set_controls_busy(self, busy):
+        if busy:
+            self.fetch_button.config(state="disabled")
+            self.load_button.config(state="disabled")
+            self.export_button.config(state="disabled")
+            self.apply_selected_button.config(state="disabled")
+            self.apply_all_button.config(state="disabled")
+            return
+
+        self.fetch_button.config(state="normal")
+        self.load_button.config(state="normal")
+        self.export_button.config(state="normal" if len(self.df) else "disabled")
+        self.apply_selected_button.config(state="normal" if len(self.df) else "disabled")
+        self.apply_all_button.config(state="normal" if len(self.df) else "disabled")
 
     def set_status(self, text):
         self.status_label.config(text=text)
@@ -283,19 +299,35 @@ class ChannelManagerGUI:
         img = None
         if thumb_path and os.path.exists(thumb_path):
             try:
-                img = Image.open(thumb_path)
+                if os.path.getsize(thumb_path) > self.MAX_THUMBNAIL_BYTES:
+                    img = None
+                else:
+                    with Image.open(thumb_path) as opened:
+                        opened.thumbnail((320, 180))
+                        img = opened.copy()
             except OSError:
                 img = None
         elif thumb_url:
             try:
                 with urlopen(thumb_url, timeout=5) as resp:
-                    data = resp.read()
-                img = Image.open(io.BytesIO(data))
+                    length = resp.headers.get("Content-Length")
+                    try:
+                        length_value = int(length) if length else None
+                    except ValueError:
+                        length_value = None
+                    if length_value and length_value > self.MAX_THUMBNAIL_BYTES:
+                        img = None
+                    else:
+                        data = resp.read(self.MAX_THUMBNAIL_BYTES + 1)
+                        if len(data) > self.MAX_THUMBNAIL_BYTES:
+                            img = None
+                        else:
+                            img = Image.open(io.BytesIO(data))
+                            img.thumbnail((320, 180))
             except Exception:
                 img = None
 
         if img:
-            img = img.resize((320, 180))
             self._thumb_image = ImageTk.PhotoImage(img)
             self.thumb_label.config(image=self._thumb_image)
         else:
@@ -479,33 +511,67 @@ class ChannelManagerGUI:
             messagebox.showerror("Failed", msg, parent=self.dialog)
 
     def apply_pending(self):
-        total = 0
-        success = 0
-        failed = 0
-        first_error = ""
-        permission_error = ""
-        for idx, row in self.df.iterrows():
-            if str(row.get("status", "")).upper() == "READY_TO_UPDATE":
-                total += 1
-                ok, msg, err_code = self.apply_row(idx)
-                if ok:
-                    success += 1
-                else:
-                    failed += 1
-                    if not first_error:
-                        first_error = msg
-                    if err_code == "permission" and not permission_error:
-                        permission_error = msg
+        if self._busy:
+            return
+        self._busy = True
+        self._set_controls_busy(True)
+        self.set_status("Status: Applying pending updates...")
+
+        def run():
+            total = 0
+            success = 0
+            failed = 0
+            first_error = ""
+            permission_error = ""
+            for idx, row in self.df.iterrows():
+                if str(row.get("status", "")).upper() == "READY_TO_UPDATE":
+                    total += 1
+                    ok, msg, err_code = self.apply_row(idx, refresh_ui=False)
+                    if ok:
+                        success += 1
+                    else:
+                        failed += 1
+                        if not first_error:
+                            first_error = msg
+                        if err_code == "permission" and not permission_error:
+                            permission_error = msg
+
+            result = {
+                "total": total,
+                "success": success,
+                "failed": failed,
+                "first_error": first_error,
+                "permission_error": permission_error,
+            }
+            self.root.after(0, lambda: self._on_apply_pending_done(result))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_apply_pending_done(self, result):
+        self.refresh_list()
+        self._busy = False
+        self._set_controls_busy(False)
+
+        total = result["total"]
+        success = result["success"]
+        failed = result["failed"]
+        first_error = result["first_error"]
+        permission_error = result["permission_error"]
+
         if total == 0:
+            self.set_status("Status: No rows marked READY_TO_UPDATE.")
             messagebox.showinfo("Apply Pending", "No rows marked READY_TO_UPDATE.", parent=self.dialog)
         elif failed:
+            self.set_status(f"Status: Completed with errors. Success: {success}, Failed: {failed}.")
             messagebox.showerror(
                 "Apply Pending",
                 f"Completed with errors. Success: {success}, Failed: {failed}.\nFirst error: {first_error}",
                 parent=self.dialog,
             )
         else:
+            self.set_status(f"Status: Done. Success: {success}.")
             messagebox.showinfo("Apply Pending", f"All done. Success: {success}.", parent=self.dialog)
+
         if permission_error:
             if self._prompt_reauth(permission_error):
                 self.set_status("Status: Re-login completed. Please retry.")
@@ -536,13 +602,14 @@ class ChannelManagerGUI:
             )
         return ""
 
-    def apply_row(self, index):
+    def apply_row(self, index, refresh_ui=True):
         row = self.df.iloc[index]
         video_id = str(row.get("video_id", "")).strip()
         if not video_id:
             self.df.at[index, "status"] = "FAILED"
             self.df.at[index, "error_message"] = "Missing video_id"
-            self.refresh_list()
+            if refresh_ui:
+                self.refresh_list()
             return False, "Missing video_id", "validation"
 
         action = str(row.get("action", "")).strip().lower()
@@ -653,7 +720,8 @@ class ChannelManagerGUI:
             err_code = "permission" if isinstance(err, PermissionError) else "error"
         if self.excel_path:
             self.df.to_excel(self.excel_path, index=False)
-        self.refresh_list()
+        if refresh_ui:
+            self.refresh_list()
         return self.df.at[index, "status"] == "UPDATED", success_msg, err_code
 
     def _prompt_reauth(self, message):

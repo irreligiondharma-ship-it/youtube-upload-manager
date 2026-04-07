@@ -112,7 +112,7 @@ class Uploader:
             return None
 
         status = str(self.excel.df.at[resume_index, "status"]).strip().upper()
-        if status in {"UPLOADED", "FAILED", "SKIPPED"}:
+        if status in {"UPLOADED", "UPLOADED_WITH_WARNINGS", "FAILED", "SKIPPED"}:
             logging.info("Resume index %s already terminal state (%s); ignoring.", resume_index, status)
             return None
 

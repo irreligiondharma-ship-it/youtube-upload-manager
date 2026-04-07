@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 from PIL import Image, ImageTk
 import os
+import time
 
 from config.constants import APP_NAME, WINDOW_WIDTH, WINDOW_HEIGHT, EXCEL_FILE, VIDEOS_DIR, THUMBNAILS_DIR
 from core.account_manager import AccountManager
@@ -14,6 +15,8 @@ from gui.channel_manager_gui import ChannelManagerGUI
 class YouTubeUploadGUI:
 
     REFRESH_INTERVAL = 1000
+    QUEUE_REFRESH_INTERVAL_MS = 3000
+    MAX_THUMBNAIL_BYTES = 10 * 1024 * 1024
 
     def __init__(self, root):
         self.root = root
@@ -36,6 +39,8 @@ class YouTubeUploadGUI:
         self._worker_finished_notified = False
         self.is_paused = False
         self.current_upload_index = None
+        self._queue_cache = []
+        self._last_queue_refresh = 0.0
 
         self.create_layout()
         self.load_accounts()
@@ -375,6 +380,17 @@ class YouTubeUploadGUI:
         self.selected_thumbnails_dir = THUMBNAILS_DIR
         self.apply_selected_sources()
 
+    @staticmethod
+    def _find_schedule_privacy_mismatches(df):
+        mismatches = []
+        for _, row in df.iterrows():
+            schedule = str(row.get("schedule_time", "")).strip()
+            privacy = str(row.get("privacy_status", "")).strip().lower()
+            if schedule and privacy and privacy != "private":
+                title = str(row.get("title", "")).strip()
+                mismatches.append((title, privacy, schedule))
+        return mismatches
+
     # ===============================
     # Preview (Fixed)
     # ===============================
@@ -401,8 +417,12 @@ class YouTubeUploadGUI:
             abs_path = thumb if os.path.isabs(thumb) else os.path.join(self.selected_thumbnails_dir, thumb)
             if os.path.exists(abs_path):
                 try:
+                    if os.path.getsize(abs_path) > self.MAX_THUMBNAIL_BYTES:
+                        self.thumbnail_label.config(image="")
+                        return
                     with Image.open(abs_path) as img:
-                        preview_img = img.resize((250, 140))
+                        img.thumbnail((250, 140))
+                        preview_img = img.copy()
                     self.thumbnail_image = ImageTk.PhotoImage(preview_img)
                     self.thumbnail_label.config(image=self.thumbnail_image)
                 except OSError:
@@ -431,6 +451,28 @@ class YouTubeUploadGUI:
 
         if not self.warn_if_excel_open():
             return
+
+        mismatches = self._find_schedule_privacy_mismatches(pending)
+        if mismatches:
+            sample = []
+            for title, privacy, schedule in mismatches[:3]:
+                label = title or "Untitled"
+                sample.append(f"- {label} (privacy: {privacy}, schedule: {schedule})")
+            more = ""
+            if len(mismatches) > 3:
+                more = f"\n...and {len(mismatches) - 3} more"
+
+            warning = (
+                "Some rows have schedule_time but privacy is not private.\n"
+                "YouTube only applies schedule when privacy is private.\n\n"
+                f"Count: {len(mismatches)}\n"
+                "Examples:\n"
+                + "\n".join(sample)
+                + more
+                + "\n\nDo you want to continue?"
+            )
+            if not messagebox.askyesno("Schedule Warning", warning):
+                return
 
         self.upload_worker = UploadWorker(
             youtube_client=self.account_manager.youtube,
@@ -490,14 +532,17 @@ class YouTubeUploadGUI:
             changed = self.excel.reload_if_changed()
             self.refresh_stats(reload=False)
             if changed:
-                self.refresh_queue(reload=False)
+                now = time.time()
+                elapsed_ms = (now - self._last_queue_refresh) * 1000
+                if elapsed_ms >= self.QUEUE_REFRESH_INTERVAL_MS:
+                    self.refresh_queue(reload=False)
         except Exception as err:
             self.log(f"Auto refresh warning: {err}")
 
         if self.upload_worker and not self.upload_worker.is_alive():
             self.set_controls_for_idle()
             if not self._worker_finished_notified:
-                self.refresh_queue(reload=True)
+                self.refresh_queue(reload=True, force=True)
                 self.refresh_stats(reload=False)
                 self.current_upload_index = None
                 self.current_upload_label.config(text="Now Uploading: None")
@@ -507,13 +552,20 @@ class YouTubeUploadGUI:
 
         self.root.after(self.REFRESH_INTERVAL, self.auto_refresh)
 
-    def refresh_queue(self, reload=True):
+    def refresh_queue(self, reload=True, force=False):
         if reload:
             self.excel.reload()
+        display_rows = [
+            f"{row.get('title')} [{row.get('status')}]"
+            for _, row in self.excel.df.iterrows()
+        ]
+        if not force and display_rows == self._queue_cache:
+            return
         self.queue_listbox.delete(0, tk.END)
-        for _, row in self.excel.df.iterrows():
-            display = f"{row.get('title')} [{row.get('status')}]"
+        for display in display_rows:
             self.queue_listbox.insert(tk.END, display)
+        self._queue_cache = display_rows
+        self._last_queue_refresh = time.time()
 
     def refresh_stats(self, reload=True):
         if reload:

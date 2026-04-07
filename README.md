@@ -29,5 +29,11 @@ YouTubeUploadManager
 │   ├── videos
 │   └── thumbnails
 ├── main.py
-├── requirements.txt
-└── run_app.bat
+└── requirements.txt
+```
+
+## Running
+
+1. Install dependencies: `pip install -r requirements.txt`
+2. Add your OAuth client file at `auth/credentials.json`
+3. Start the app: `python main.py`

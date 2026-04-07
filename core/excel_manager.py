@@ -212,7 +212,8 @@ class ExcelManager:
         if not target:
             return False
 
-        uploaded = self.df[self.df["status"].isin(["UPLOADED", "UPLOADED_WITH_WARNINGS"])]
+        status_series = self.df["status"].astype(str).str.strip().str.upper()
+        uploaded = self.df[status_series.isin(["UPLOADED", "UPLOADED_WITH_WARNINGS"])]
         for existing_path in uploaded["video_path"].tolist():
             if self._normalize_video_path(existing_path) == target:
                 return True
@@ -225,9 +226,9 @@ class ExcelManager:
         total = len(self.df)
         status_series = self.df["status"].astype(str).str.strip().str.upper()
         uploaded = len(self.df[status_series.isin(["UPLOADED", "UPLOADED_WITH_WARNINGS"])])
-        failed = len(self.df[self.df["status"] == "FAILED"])
-        pending = len(self.df[self.df["status"] == "PENDING"])
-        skipped = len(self.df[self.df["status"] == "SKIPPED"])
+        failed = len(self.df[status_series == "FAILED"])
+        pending = len(self.df[status_series == "PENDING"])
+        skipped = len(self.df[status_series == "SKIPPED"])
 
         return {
             "total": total,

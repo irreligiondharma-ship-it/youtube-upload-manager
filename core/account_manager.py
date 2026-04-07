@@ -19,6 +19,12 @@ class AccountManager:
         self.current_account = None
         self.youtube = None
 
+    def _secure_token_file(self, token_path):
+        try:
+            os.chmod(token_path, 0o600)
+        except Exception as err:
+            logging.warning("Could not restrict token file permissions: %s", err)
+
     def add_account(self):
         if not os.path.exists(CREDENTIALS_FILE):
             raise FileNotFoundError("credentials.json not found in auth folder.")
@@ -48,8 +54,9 @@ class AccountManager:
         os.makedirs(account_path, exist_ok=True)
 
         token_path = os.path.join(account_path, "token.json")
-        with open(token_path, "w") as token_file:
+        with open(token_path, "w", encoding="utf-8") as token_file:
             token_file.write(creds.to_json())
+        self._secure_token_file(token_path)
 
         history_path = os.path.join(account_path, "history.json")
         if not os.path.exists(history_path):
@@ -73,8 +80,11 @@ class AccountManager:
         creds = Credentials.from_authorized_user_file(token_path, SCOPES)
         if creds.expired and creds.refresh_token:
             creds.refresh(Request())
-            with open(token_path, "w") as token_file:
+            with open(token_path, "w", encoding="utf-8") as token_file:
                 token_file.write(creds.to_json())
+            self._secure_token_file(token_path)
+        else:
+            self._secure_token_file(token_path)
 
         self.youtube = build("youtube", "v3", credentials=creds)
         self.current_account = account_name
