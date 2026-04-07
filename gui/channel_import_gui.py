@@ -256,6 +256,8 @@ class ChannelImportGUI:
         self.channel_id = channel_id
         self.playlists = playlists
         self.playlist_listbox.delete(0, tk.END)
+        self.playlist_listbox.config(state="normal")
+        self.playlist_listbox.focus_set()
         self.clear_videos()
 
         for item in playlists:
@@ -266,6 +268,7 @@ class ChannelImportGUI:
             self.playlist_listbox.insert(tk.END, f"{title} | {pid}{suffix}")
 
         self.set_busy(False)
+        self.dialog.update_idletasks()
         self.set_status(f"Loaded {len(playlists)} playlists.")
 
     def on_videos_loaded(self, playlist_id, items):
