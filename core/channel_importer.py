@@ -2,7 +2,7 @@ import logging
 import os
 import re
 import shutil
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
@@ -15,6 +15,7 @@ from core.path_utils import normalize_path
 _CHANNEL_ID_RE = re.compile(r"(UC[a-zA-Z0-9_-]{20,})")
 _HANDLE_RE = re.compile(r"@([A-Za-z0-9_.-]+)")
 _INVALID_PATH_CHARS = re.compile(r'[<>:"/\\\\|?*]+')
+_VIDEO_ID_RE = re.compile(r"(?:v=|youtu\.be/|shorts/|embed/)([A-Za-z0-9_-]{11})")
 
 
 def sanitize_filename(value: str, max_len: int = 80) -> str:
@@ -47,6 +48,42 @@ def _chunk(values: Iterable[str], size: int) -> Iterable[List[str]]:
     values = list(values)
     for i in range(0, len(values), size):
         yield values[i : i + size]
+
+
+def extract_video_id(video_input: str) -> str:
+    raw = str(video_input or "").strip()
+    if not raw:
+        return ""
+
+    match = _VIDEO_ID_RE.search(raw)
+    if match:
+        return match.group(1)
+
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", raw):
+        return raw
+
+    return ""
+
+
+def find_existing_video_file(output_dir: str, video_id: str) -> Optional[str]:
+    if not output_dir or not video_id:
+        return None
+    if not os.path.isdir(output_dir):
+        return None
+
+    needle = f"[{video_id}]"
+    for name in os.listdir(output_dir):
+        if needle not in name:
+            continue
+        if name.endswith(".part"):
+            continue
+        path = os.path.join(output_dir, name)
+        try:
+            if os.path.getsize(path) > 0:
+                return normalize_path(path)
+        except OSError:
+            continue
+    return None
 
 
 def resolve_channel_id(youtube, channel_input: str) -> str:
@@ -223,6 +260,42 @@ def fetch_video_details(youtube, video_ids: Iterable[str]) -> Dict[str, Dict[str
     return details
 
 
+def fetch_single_video_item(youtube, video_id: str) -> Tuple[Dict[str, str], Dict[str, str]]:
+    resp = youtube.videos().list(part="snippet,status", id=video_id).execute()
+    items = resp.get("items", [])
+    if not items:
+        raise ValueError("Video not found or not accessible.")
+
+    item = items[0]
+    snippet = item.get("snippet", {})
+    status = item.get("status", {})
+    thumbnails = snippet.get("thumbnails", {})
+    thumb_url = (
+        thumbnails.get("high", {}).get("url")
+        or thumbnails.get("medium", {}).get("url")
+        or thumbnails.get("default", {}).get("url")
+        or ""
+    )
+
+    base_item = {
+        "video_id": video_id,
+        "title": str(snippet.get("title", "")),
+        "description": str(snippet.get("description", "")),
+        "published_at": str(snippet.get("publishedAt", "")),
+        "thumbnail_url": thumb_url,
+        "playlist_id": "",
+        "playlist_title": "",
+    }
+
+    detail = {
+        "tags": ",".join(snippet.get("tags", [])) if snippet.get("tags") else "",
+        "category_id": str(snippet.get("categoryId", "")),
+        "privacy_status": str(status.get("privacyStatus", "")),
+    }
+
+    return base_item, detail
+
+
 def build_import_rows(items: List[Dict[str, str]], details: Dict[str, Dict[str, str]]) -> List[Dict[str, object]]:
     rows: List[Dict[str, object]] = []
     for item in items:
@@ -273,6 +346,7 @@ def download_video(
     output_dir: str,
     quality: str,
     use_aria2c: bool = False,
+    progress_hook=None,
 ) -> Optional[str]:
     try:
         from yt_dlp import YoutubeDL
@@ -299,6 +373,25 @@ def download_video(
         "concurrent_fragment_downloads": 4,
         "noprogress": True,
     }
+
+    if progress_hook:
+        def _hook(status):
+            if not progress_hook:
+                return
+            if status.get("status") == "downloading":
+                total = status.get("total_bytes") or status.get("total_bytes_estimate")
+                downloaded = status.get("downloaded_bytes", 0)
+                percent = None
+                if total:
+                    try:
+                        percent = int((downloaded / total) * 100)
+                    except ZeroDivisionError:
+                        percent = None
+                progress_hook(percent)
+            elif status.get("status") == "finished":
+                progress_hook(100)
+
+        ydl_opts["progress_hooks"] = [_hook]
 
     if use_aria2c:
         if shutil.which("aria2c"):
@@ -329,6 +422,8 @@ def import_playlists(
     base_download_dir: str = "",
     quality: str = "best",
     use_aria2c: bool = False,
+    skip_existing: bool = True,
+    video_filter_map: Optional[Dict[str, Set[str]]] = None,
     progress_callback=None,
     stop_event=None,
 ) -> int:
@@ -344,6 +439,11 @@ def import_playlists(
             progress_callback("playlist", index, len(playlist_ids), title)
 
         items = fetch_playlist_items(youtube, playlist_id, title)
+        filter_ids = None
+        if video_filter_map and playlist_id in video_filter_map:
+            filter_ids = video_filter_map.get(playlist_id)
+        if filter_ids:
+            items = [item for item in items if item.get("video_id") in filter_ids]
         details = fetch_video_details(youtube, [item["video_id"] for item in items])
         rows = build_import_rows(items, details)
 
@@ -358,21 +458,37 @@ def import_playlists(
                     raise InterruptedError("Import canceled by user.")
 
                 row = item["row"]
+                def _progress(percent):
+                    if progress_callback:
+                        progress_callback("download", idx, total_rows, row.get("title", ""), percent)
+
                 if progress_callback:
-                    progress_callback("download", idx, total_rows, row.get("title", ""))
+                    progress_callback("download", idx, total_rows, row.get("title", ""), None)
 
                 if download_videos:
                     try:
                         video_url = row.get("youtube_url", "")
-                        saved = download_video(
-                            video_url=video_url,
-                            output_dir=videos_dir,
-                            quality=quality,
-                            use_aria2c=use_aria2c,
-                        )
-                        if saved:
-                            row["video_path"] = saved
-                            row["status"] = "DOWNLOADED"
+                        if skip_existing:
+                            existing = find_existing_video_file(videos_dir, item.get("video_id", ""))
+                        else:
+                            existing = None
+
+                        if existing:
+                            row["video_path"] = existing
+                            row["status"] = "SKIPPED_ALREADY_DOWNLOADED"
+                            row["error_message"] = "Already downloaded"
+                            _progress(100)
+                        else:
+                            saved = download_video(
+                                video_url=video_url,
+                                output_dir=videos_dir,
+                                quality=quality,
+                                use_aria2c=use_aria2c,
+                                progress_hook=_progress,
+                            )
+                            if saved:
+                                row["video_path"] = saved
+                                row["status"] = "DOWNLOADED"
                     except Exception as err:
                         row["status"] = "FAILED"
                         row["error_message"] = str(err)
@@ -390,6 +506,77 @@ def import_playlists(
 
     export_rows(all_rows, excel_path)
     return len(all_rows)
+
+
+def import_single_video(
+    youtube,
+    video_input: str,
+    excel_path: str,
+    download_videos: bool = True,
+    download_thumbnails: bool = False,
+    base_download_dir: str = "",
+    quality: str = "best",
+    use_aria2c: bool = False,
+    skip_existing: bool = True,
+    progress_callback=None,
+    stop_event=None,
+) -> int:
+    video_id = extract_video_id(video_input)
+    if not video_id:
+        raise ValueError("Invalid video URL or ID.")
+
+    if stop_event and stop_event.is_set():
+        raise InterruptedError("Import canceled by user.")
+
+    item, detail = fetch_single_video_item(youtube, video_id)
+    rows = build_import_rows([item], {video_id: detail})
+
+    row = rows[0]["row"]
+    if progress_callback:
+        progress_callback("download", 1, 1, row.get("title", ""), None)
+
+    if download_videos or download_thumbnails:
+        single_dir = os.path.join(base_download_dir, "single")
+        videos_dir = os.path.join(single_dir, "videos")
+        thumbs_dir = os.path.join(single_dir, "thumbnails")
+
+        def _progress(percent):
+            if progress_callback:
+                progress_callback("download", 1, 1, row.get("title", ""), percent)
+
+        if download_videos:
+            if skip_existing:
+                existing = find_existing_video_file(videos_dir, video_id)
+            else:
+                existing = None
+            if existing:
+                row["video_path"] = existing
+                row["status"] = "SKIPPED_ALREADY_DOWNLOADED"
+                row["error_message"] = "Already downloaded"
+                _progress(100)
+            else:
+                saved = download_video(
+                    video_url=row.get("youtube_url", ""),
+                    output_dir=videos_dir,
+                    quality=quality,
+                    use_aria2c=use_aria2c,
+                    progress_hook=_progress,
+                )
+                if saved:
+                    row["video_path"] = saved
+                    row["status"] = "DOWNLOADED"
+
+        if download_thumbnails:
+            thumb_url = rows[0].get("thumbnail_url", "")
+            if thumb_url:
+                name = f"{video_id}.jpg"
+                thumb_path = os.path.join(thumbs_dir, name)
+                saved_thumb = download_thumbnail(thumb_url, thumb_path)
+                if saved_thumb:
+                    row["thumbnail_path"] = saved_thumb
+
+    export_rows(rows, excel_path)
+    return 1
 
 
 def export_rows(rows: List[Dict[str, object]], excel_path: str) -> None:

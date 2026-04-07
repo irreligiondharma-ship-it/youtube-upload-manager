@@ -6,8 +6,11 @@ from tkinter import filedialog, messagebox, ttk
 
 from config.constants import DATA_DIR, STORAGE_DIR
 from core.channel_importer import (
+    extract_video_id,
+    fetch_playlist_items,
     fetch_playlists,
     import_playlists,
+    import_single_video,
     resolve_channel_id,
 )
 
@@ -18,6 +21,8 @@ class ChannelImportGUI:
         self.youtube = youtube_client
         self.channel_id = ""
         self.playlists = []
+        self.video_items = []
+        self.video_playlist_id = ""
         self.stop_event = threading.Event()
 
         self.dialog = tk.Toplevel(root)
@@ -50,6 +55,18 @@ class ChannelImportGUI:
         ttk.Button(playlist_buttons, text="Select All", command=self.select_all).pack(side="left")
         ttk.Button(playlist_buttons, text="Clear", command=self.clear_selection).pack(side="left", padx=6)
 
+        video_header = ttk.Frame(left)
+        video_header.pack(fill="x", pady=(10, 0))
+        ttk.Label(video_header, text="Videos (optional)").pack(side="left")
+        ttk.Button(video_header, text="Load Videos", command=self.load_videos).pack(side="right")
+
+        self.video_listbox = tk.Listbox(left, selectmode="extended", height=8)
+        self.video_listbox.pack(fill="both", expand=False)
+
+        video_buttons = ttk.Frame(left)
+        video_buttons.pack(fill="x", pady=(4, 0))
+        ttk.Button(video_buttons, text="Clear Videos", command=self.clear_videos).pack(side="left")
+
         right = ttk.Frame(body)
         right.pack(side="right", fill="both", expand=True, padx=(8, 0))
 
@@ -77,6 +94,14 @@ class ChannelImportGUI:
             row=2, column=1, sticky="w", pady=(8, 0)
         )
 
+        self.skip_existing_var = tk.BooleanVar(value=True)
+        self.skip_existing_check = ttk.Checkbutton(
+            options,
+            text="Skip already downloaded",
+            variable=self.skip_existing_var,
+        )
+        self.skip_existing_check.grid(row=2, column=2, sticky="w", pady=(8, 0))
+
         ttk.Label(options, text="Quality").grid(row=3, column=0, sticky="w", pady=(6, 0))
         self.quality_var = tk.StringVar(value="best")
         self.quality_combo = ttk.Combobox(
@@ -98,10 +123,22 @@ class ChannelImportGUI:
 
         options.columnconfigure(1, weight=1)
 
+        single = ttk.LabelFrame(right, text="Single Video", padding=8)
+        single.pack(fill="x", pady=(10, 0))
+        ttk.Label(single, text="Video URL/ID").grid(row=0, column=0, sticky="w")
+        self.single_entry = ttk.Entry(single)
+        self.single_entry.grid(row=0, column=1, sticky="we", padx=6)
+        ttk.Button(single, text="Download Single", command=self.start_single_video).grid(row=0, column=2)
+        single.columnconfigure(1, weight=1)
+
         status = ttk.LabelFrame(right, text="Status", padding=8)
         status.pack(fill="both", expand=True, pady=(10, 0))
         self.status_label = ttk.Label(status, text="Idle")
         self.status_label.pack(anchor="w")
+        self.current_item_label = ttk.Label(status, text="")
+        self.current_item_label.pack(anchor="w", pady=(4, 0))
+        self.video_progress = ttk.Progressbar(status, maximum=100)
+        self.video_progress.pack(fill="x", pady=(4, 0))
         self.progress = ttk.Progressbar(status, mode="indeterminate")
         self.progress.pack(fill="x", pady=(6, 0))
 
@@ -122,6 +159,12 @@ class ChannelImportGUI:
         state = "disabled" if busy else "normal"
         self.start_button.config(state=state)
         self.stop_button.config(state="normal" if busy else "disabled")
+        self.channel_entry.config(state=state)
+        self.playlist_listbox.config(state=state)
+        self.video_listbox.config(state=state)
+        self.single_entry.config(state=state)
+        self.video_progress["value"] = 0
+        self.current_item_label.config(text="")
         if busy:
             self.progress.start(10)
         else:
@@ -150,6 +193,7 @@ class ChannelImportGUI:
         download_videos = self.download_videos_var.get()
         self.quality_combo.config(state="readonly" if download_videos else "disabled")
         self.fast_mode_check.config(state="normal" if download_videos else "disabled")
+        self.skip_existing_check.config(state="normal" if download_videos else "disabled")
         if not download_videos:
             self.fast_mode_var.set(False)
 
@@ -158,6 +202,36 @@ class ChannelImportGUI:
 
     def clear_selection(self):
         self.playlist_listbox.selection_clear(0, tk.END)
+
+    def clear_videos(self):
+        self.video_items = []
+        self.video_playlist_id = ""
+        self.video_listbox.delete(0, tk.END)
+
+    def load_videos(self):
+        selections = list(self.playlist_listbox.curselection())
+        if len(selections) != 1:
+            messagebox.showerror("Select One", "Select exactly one playlist to load videos.", parent=self.dialog)
+            return
+
+        playlist = self.playlists[selections[0]]
+        playlist_id = playlist.get("id", "")
+        playlist_title = playlist.get("title", "")
+        if not playlist_id:
+            messagebox.showerror("Invalid", "Playlist ID missing.", parent=self.dialog)
+            return
+
+        self.set_busy(True)
+        self.set_status(f"Loading videos for: {playlist_title}")
+
+        def run():
+            try:
+                items = fetch_playlist_items(self.youtube, playlist_id, playlist_title)
+                self.root.after(0, lambda: self.on_videos_loaded(playlist_id, items))
+            except Exception as err:
+                self.root.after(0, lambda: self.on_error(err))
+
+        threading.Thread(target=run, daemon=True).start()
 
     def fetch_playlists(self):
         raw = self.channel_entry.get().strip()
@@ -182,6 +256,7 @@ class ChannelImportGUI:
         self.channel_id = channel_id
         self.playlists = playlists
         self.playlist_listbox.delete(0, tk.END)
+        self.clear_videos()
 
         for item in playlists:
             title = item.get("title", "")
@@ -192,6 +267,18 @@ class ChannelImportGUI:
 
         self.set_busy(False)
         self.set_status(f"Loaded {len(playlists)} playlists.")
+
+    def on_videos_loaded(self, playlist_id, items):
+        self.video_items = items
+        self.video_playlist_id = playlist_id
+        self.video_listbox.delete(0, tk.END)
+        for item in items:
+            title = item.get("title", "")
+            vid = item.get("video_id", "")
+            self.video_listbox.insert(tk.END, f"{title} | {vid}")
+
+        self.set_busy(False)
+        self.set_status(f"Loaded {len(items)} videos.")
 
     def start_import(self):
         selections = list(self.playlist_listbox.curselection())
@@ -208,6 +295,7 @@ class ChannelImportGUI:
         download_thumbs = self.download_thumbs_var.get()
         base_folder = self.base_folder_entry.get().strip()
         use_aria2c = self.fast_mode_var.get()
+        skip_existing = self.skip_existing_var.get()
 
         if download_videos and not messagebox.askyesno(
             "Permission Confirmation",
@@ -230,6 +318,27 @@ class ChannelImportGUI:
             use_aria2c = False
 
         playlist_map = {self.playlists[i]["id"]: self.playlists[i]["title"] for i in selections}
+        selected_videos = list(self.video_listbox.curselection())
+        video_filter_map = None
+        if selected_videos:
+            if len(selections) != 1:
+                messagebox.showerror(
+                    "Video Filter",
+                    "Select exactly one playlist when filtering by individual videos.",
+                    parent=self.dialog,
+                )
+                return
+            playlist_id = self.playlists[selections[0]].get("id", "")
+            if playlist_id != self.video_playlist_id:
+                messagebox.showerror(
+                    "Video Filter",
+                    "Loaded videos are from a different playlist. Please reload videos.",
+                    parent=self.dialog,
+                )
+                return
+            video_filter_map = {
+                playlist_id: {self.video_items[i].get("video_id", "") for i in selected_videos}
+            }
         quality = self.quality_var.get().strip() or "best"
 
         self.stop_event.clear()
@@ -247,6 +356,82 @@ class ChannelImportGUI:
                     base_download_dir=base_folder,
                     quality=quality,
                     use_aria2c=use_aria2c,
+                    skip_existing=skip_existing,
+                    video_filter_map=video_filter_map,
+                    progress_callback=self.on_progress,
+                    stop_event=self.stop_event,
+                )
+                self.root.after(0, lambda: self.on_done(count, excel_path))
+            except InterruptedError:
+                self.root.after(0, self.on_cancelled)
+            except Exception as err:
+                self.root.after(0, lambda: self.on_error(err))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def start_single_video(self):
+        video_input = self.single_entry.get().strip()
+        if not video_input:
+            messagebox.showerror("Missing", "Enter a video URL or ID.", parent=self.dialog)
+            return
+
+        if not extract_video_id(video_input):
+            messagebox.showerror("Invalid", "Could not detect a valid video ID.", parent=self.dialog)
+            return
+
+        excel_path = self.excel_entry.get().strip()
+        if not excel_path:
+            excel_path = os.path.join(DATA_DIR, "channel_export.xlsx")
+            self.excel_entry.insert(0, excel_path)
+
+        download_videos = self.download_videos_var.get()
+        download_thumbs = self.download_thumbs_var.get()
+        base_folder = self.base_folder_entry.get().strip()
+        use_aria2c = self.fast_mode_var.get()
+        skip_existing = self.skip_existing_var.get()
+
+        if not download_videos:
+            messagebox.showerror("Missing", "Enable 'Download videos' for single video.", parent=self.dialog)
+            return
+
+        if download_videos and not messagebox.askyesno(
+            "Permission Confirmation",
+            "You confirm you have permission to download this video.\nDo you want to continue?",
+            parent=self.dialog,
+        ):
+            return
+
+        if (download_videos or download_thumbs) and not base_folder:
+            messagebox.showerror("Missing", "Select a base download folder.", parent=self.dialog)
+            return
+
+        if use_aria2c and not shutil.which("aria2c"):
+            messagebox.showwarning(
+                "aria2c Not Found",
+                "Fast mode requires aria2c, but it was not found on this system.\n"
+                "Falling back to the default downloader.",
+                parent=self.dialog,
+            )
+            use_aria2c = False
+
+        quality = self.quality_var.get().strip() or "best"
+
+        self.stop_event.clear()
+        self.set_busy(True)
+        self.set_status("Starting single video download...")
+
+        def run():
+            try:
+                count = import_single_video(
+                    youtube=self.youtube,
+                    video_input=video_input,
+                    excel_path=excel_path,
+                    download_videos=download_videos,
+                    download_thumbnails=download_thumbs,
+                    base_download_dir=base_folder,
+                    quality=quality,
+                    use_aria2c=use_aria2c,
+                    skip_existing=skip_existing,
                     progress_callback=self.on_progress,
                     stop_event=self.stop_event,
                 )
@@ -262,25 +447,36 @@ class ChannelImportGUI:
         self.stop_event.set()
         self.set_status("Stopping...")
 
-    def on_progress(self, phase, current, total, message):
+    def on_progress(self, phase, current, total, message, percent=None):
         def apply():
             if phase == "playlist":
                 self.set_status(f"Fetching playlist {current}/{total}: {message}")
             elif phase == "download":
                 self.set_status(f"Downloading {current}/{total}: {message}")
+                self.current_item_label.config(text=f"Current: {message}")
+                if percent is not None:
+                    self.video_progress["value"] = percent
+                else:
+                    self.video_progress["value"] = 0
         self.root.after(0, apply)
 
     def on_done(self, count, excel_path):
         self.set_busy(False)
         self.set_status(f"Done. Exported {count} rows.")
+        self.current_item_label.config(text="")
+        self.video_progress["value"] = 0
         messagebox.showinfo("Done", f"Saved {count} rows to:\n{excel_path}", parent=self.dialog)
 
     def on_cancelled(self):
         self.set_busy(False)
         self.set_status("Canceled.")
+        self.current_item_label.config(text="")
+        self.video_progress["value"] = 0
         messagebox.showinfo("Canceled", "Import canceled.", parent=self.dialog)
 
     def on_error(self, err):
         self.set_busy(False)
         self.set_status("Error")
+        self.current_item_label.config(text="")
+        self.video_progress["value"] = 0
         messagebox.showerror("Error", str(err), parent=self.dialog)

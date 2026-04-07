@@ -52,3 +52,26 @@ def test_resolve_channel_id_handle_uses_channels_list():
     dummy = DummyYoutube()
     assert resolve_channel_id(dummy, "@testhandle") == "UC999"
     assert "forHandle" in dummy._channels.kwargs
+
+
+def test_extract_video_id_from_url():
+    from core.channel_importer import extract_video_id
+
+    vid = "dQw4w9WgXcQ"
+    assert extract_video_id(f"https://youtu.be/{vid}") == vid
+    assert extract_video_id(f"https://www.youtube.com/watch?v={vid}") == vid
+    assert extract_video_id(vid) == vid
+
+
+def test_find_existing_video_file(tmp_path):
+    from core.channel_importer import find_existing_video_file
+
+    vid = "dQw4w9WgXcQ"
+    folder = tmp_path / "videos"
+    folder.mkdir()
+    path = folder / f"Sample [{vid}].mp4"
+    path.write_bytes(b"data")
+
+    found = find_existing_video_file(str(folder), vid)
+    assert found is not None
+    assert found.lower().endswith(".mp4")
