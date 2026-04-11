@@ -71,14 +71,37 @@ def find_existing_video_file(output_dir: str, video_id: str) -> Optional[str]:
     if not os.path.isdir(output_dir):
         return None
 
+    allowed_exts = {
+        ".mp4",
+        ".mkv",
+        ".webm",
+        ".mov",
+        ".m4v",
+        ".avi",
+        ".flv",
+    }
+    temp_suffixes = (
+        ".part",
+        ".ytdl",
+        ".aria2",
+        ".frag",
+        ".frag.urls",
+        ".part.frag",
+        ".part.frag.urls",
+    )
+
     needle = f"[{video_id}]"
     for name in os.listdir(output_dir):
         if needle not in name:
             continue
-        if name.endswith(".part"):
+        lowered = name.lower()
+        if lowered.endswith(temp_suffixes):
             continue
         path = os.path.join(output_dir, name)
         try:
+            _, ext = os.path.splitext(name)
+            if ext.lower() not in allowed_exts:
+                continue
             if os.path.getsize(path) > 0:
                 return normalize_path(path)
         except OSError:
