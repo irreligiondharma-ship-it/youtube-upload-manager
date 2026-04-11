@@ -48,7 +48,7 @@ class ChannelImportGUI:
         left.pack(side="left", fill="both", expand=True)
 
         ttk.Label(left, text="Playlists").pack(anchor="w")
-        self.playlist_listbox = tk.Listbox(left, selectmode="extended")
+        self.playlist_listbox = tk.Listbox(left, selectmode="extended", exportselection=False)
         self.playlist_listbox.pack(fill="both", expand=True)
 
         playlist_buttons = ttk.Frame(left)
@@ -61,12 +61,13 @@ class ChannelImportGUI:
         ttk.Label(video_header, text="Videos (optional)").pack(side="left")
         ttk.Button(video_header, text="Load Videos", command=self.load_videos).pack(side="right")
 
-        self.video_listbox = tk.Listbox(left, selectmode="extended", height=8)
+        self.video_listbox = tk.Listbox(left, selectmode="extended", height=8, exportselection=False)
         self.video_listbox.pack(fill="both", expand=False)
 
         video_buttons = ttk.Frame(left)
         video_buttons.pack(fill="x", pady=(4, 0))
-        ttk.Button(video_buttons, text="Clear Videos", command=self.clear_videos).pack(side="left")
+        ttk.Button(video_buttons, text="Select All Videos", command=self.select_all_videos).pack(side="left")
+        ttk.Button(video_buttons, text="Clear Videos", command=self.clear_videos).pack(side="left", padx=6)
 
         right = ttk.Frame(body)
         right.pack(side="right", fill="both", expand=True, padx=(8, 0))
@@ -235,6 +236,10 @@ class ChannelImportGUI:
         self.video_items = []
         self.video_playlist_id = ""
         self.video_listbox.delete(0, tk.END)
+
+    def select_all_videos(self):
+        self._audit("select_all_videos")
+        self.video_listbox.selection_set(0, tk.END)
 
     def load_videos(self):
         selections = list(self.playlist_listbox.curselection())
