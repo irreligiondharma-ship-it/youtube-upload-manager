@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time
 from threading import Event
 
 from config.constants import APP_STATE_FILE
@@ -165,6 +166,22 @@ class Uploader:
             err,
         )
 
+    @staticmethod
+    def _backoff_seconds(attempt, base=2, cap=30):
+        if attempt < 1:
+            return 0
+        return min(cap, base * (2 ** (attempt - 1)))
+
+    def _sleep_with_cancel(self, seconds):
+        if seconds <= 0:
+            return True
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if self.stop_event.is_set():
+                return False
+            time.sleep(0.2)
+        return True
+
     def start(self):
         self._notify_status("state_change", state="running")
         resume_index = self._get_resume_index()
@@ -173,6 +190,10 @@ class Uploader:
 
         while not self.stop_event.is_set():
             self.pause_event.wait()
+            if self.stop_event.is_set():
+                break
+            if hasattr(self.excel, "flush_pending_save"):
+                self.excel.flush_pending_save()
 
             if resume_index is not None:
                 index = resume_index
@@ -235,15 +256,23 @@ class Uploader:
                         break
                     except Exception as err:
                         attempt += 1
+                        if self.stop_event.is_set():
+                            raise InterruptedError("Upload stopped by user.") from err
                         if attempt > RETRY_LIMIT:
                             raise err
-                        logging.warning("Retrying upload...")
+                        delay = self._backoff_seconds(attempt)
+                        logging.warning("Retrying upload in %s seconds...", delay)
+                        if not self._sleep_with_cancel(delay):
+                            raise InterruptedError("Upload stopped by user.") from err
 
                 if thumbnail_path:
                     try:
                         self.youtube_service.upload_thumbnail(video_id, thumbnail_path)
                     except Exception as err:
                         warnings.append(f"Thumbnail upload failed: {err}")
+                        delay = self._backoff_seconds(1, base=1, cap=5)
+                        if not self._sleep_with_cancel(delay):
+                            raise InterruptedError("Upload stopped by user.") from err
                         try:
                             self.youtube_service.upload_thumbnail(video_id, thumbnail_path)
                         except Exception as err2:
@@ -254,6 +283,9 @@ class Uploader:
                         self.youtube_service.add_video_to_playlist(video_id, playlist_id)
                     except Exception as err:
                         warnings.append(f"Playlist add failed: {err}")
+                        delay = self._backoff_seconds(1, base=1, cap=5)
+                        if not self._sleep_with_cancel(delay):
+                            raise InterruptedError("Upload stopped by user.") from err
                         try:
                             self.youtube_service.add_video_to_playlist(video_id, playlist_id)
                         except Exception as err2:

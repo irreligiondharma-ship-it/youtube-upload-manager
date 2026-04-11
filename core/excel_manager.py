@@ -1,5 +1,6 @@
 import os
 import logging
+import time
 import pandas as pd
 from datetime import datetime
 from config.constants import EXCEL_FILE
@@ -25,6 +26,7 @@ REQUIRED_COLUMNS = [
 
 
 class ExcelManager:
+    SAVE_RETRY_COOLDOWN_SEC = 2.0
 
     def __init__(self, excel_file=None, videos_dir=None):
         self.excel_file = excel_file or EXCEL_FILE
@@ -32,6 +34,7 @@ class ExcelManager:
         self.df = None
         self._last_mtime = None
         self._pending_save = False
+        self._last_save_attempt = 0.0
         self.load_excel(force=True)
 
     # ===============================
@@ -111,6 +114,10 @@ class ExcelManager:
     # Save Excel
     # ===============================
     def save(self):
+        now = time.monotonic()
+        if self._pending_save and (now - self._last_save_attempt) < self.SAVE_RETRY_COOLDOWN_SEC:
+            return
+        self._last_save_attempt = now
         try:
             self.df.to_excel(self.excel_file, index=False)
             if os.path.exists(self.excel_file):

@@ -580,7 +580,9 @@ def import_single_video(
 
 
 def export_rows(rows: List[Dict[str, object]], excel_path: str) -> None:
-    os.makedirs(os.path.dirname(excel_path), exist_ok=True)
+    parent_dir = os.path.dirname(excel_path)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
     data = [item["row"] for item in rows]
     df = pd.DataFrame(data, columns=REQUIRED_COLUMNS)
     df.to_excel(excel_path, index=False)

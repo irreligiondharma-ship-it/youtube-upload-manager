@@ -4,6 +4,7 @@ auth/
 # Videos and thumbnails
 storage/videos/
 storage/thumbnails/
+storage/downloads/
 
 # Logs
 logs/
@@ -26,6 +27,7 @@ venv/
 
 # App state
 data/app_state.json
+data/input_sources.json
 
 # OS files
 .DS_Store
