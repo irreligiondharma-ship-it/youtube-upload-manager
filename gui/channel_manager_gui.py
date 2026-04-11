@@ -4,6 +4,7 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from urllib.request import urlopen
+import logging
 
 import pandas as pd
 from PIL import Image, ImageTk
@@ -160,6 +161,17 @@ class ChannelManagerGUI:
         self.excel_path = ""
         self.load_playlists_async()
 
+    def _audit(self, event, level=logging.INFO, **details):
+        parts = [f"event={event}"]
+        for key, value in details.items():
+            if value is None:
+                continue
+            text = str(value)
+            if len(text) > 120:
+                text = text[:117] + "..."
+            parts.append(f"{key}={text}")
+        logging.log(level, "AUDIT_MANAGER | %s", " | ".join(parts))
+
     def _set_controls_busy(self, busy):
         if busy:
             self.fetch_button.config(state="disabled")
@@ -189,6 +201,7 @@ class ChannelManagerGUI:
         self.apply_all_button.config(state="disabled")
         self.listbox.delete(0, tk.END)
         self.set_status("Status: Fetching videos...")
+        self._audit("fetch_videos_start", account=self.account_name)
 
         def run():
             try:
@@ -207,6 +220,7 @@ class ChannelManagerGUI:
     def on_fetch_done(self):
         self.refresh_list()
         self.set_status(f"Status: Done. Total {len(self.df)} videos.")
+        self._audit("fetch_videos_done", count=len(self.df))
         self.fetch_button.config(state="normal")
         self.load_button.config(state="normal")
         self.export_button.config(state="normal" if len(self.df) else "disabled")
@@ -217,6 +231,7 @@ class ChannelManagerGUI:
 
     def on_fetch_error(self, err):
         self.set_status("Status: Error")
+        self._audit("fetch_videos_error", level=logging.ERROR, error=str(err))
         self.fetch_button.config(state="normal")
         self.load_button.config(state="normal")
         self.export_button.config(state="disabled")
@@ -227,6 +242,7 @@ class ChannelManagerGUI:
 
     def export_excel(self):
         if self.df.empty:
+            self._audit("export_excel_no_data", level=logging.WARNING)
             messagebox.showinfo("No Data", "No videos to export.", parent=self.dialog)
             return
         path = filedialog.asksaveasfilename(
@@ -235,10 +251,12 @@ class ChannelManagerGUI:
             filetypes=[("Excel Files", "*.xlsx"), ("All Files", "*.*")],
         )
         if not path:
+            self._audit("export_excel_cancelled")
             return
         ensure_columns(self.df)
         self.df.to_excel(path, index=False)
         self.excel_path = path
+        self._audit("export_excel_saved", path=path, count=len(self.df))
         messagebox.showinfo("Exported", f"Saved {len(self.df)} videos to Excel.", parent=self.dialog)
 
     def load_excel(self):
@@ -247,10 +265,12 @@ class ChannelManagerGUI:
             filetypes=[("Excel Files", "*.xlsx *.xls"), ("All Files", "*.*")],
         )
         if not path:
+            self._audit("load_excel_cancelled")
             return
         df = pd.read_excel(path, dtype=str)
         self.df = ensure_columns(df.fillna(""))
         self.excel_path = path
+        self._audit("load_excel", path=path, count=len(self.df))
         self.refresh_list()
         self.export_button.config(state="normal")
         self.apply_selected_button.config(state="normal")
@@ -274,6 +294,12 @@ class ChannelManagerGUI:
         index = selection[0]
         self.selected_index = index
         row = self.df.iloc[index]
+        self._audit(
+            "row_selected",
+            index=index,
+            video_id=str(row.get("video_id", "")),
+            title=str(row.get("title", "")),
+        )
         self._show_thumbnail(row)
         defaults = {
             "action": "update_all",
@@ -461,6 +487,7 @@ class ChannelManagerGUI:
             self.playlist_id_to_display[pid] = display
         if self._playlist_combo is not None:
             self._playlist_combo["values"] = self.playlist_options
+        self._audit("playlists_loaded", count=len(playlists))
 
     def save_row(self):
         selection = self.listbox.curselection()
@@ -491,6 +518,12 @@ class ChannelManagerGUI:
         else:
             self.set_status("Status: Row saved in memory. Export to Excel to persist.")
         self.refresh_list()
+        self._audit(
+            "row_saved",
+            index=index,
+            video_id=str(self.df.at[index, "video_id"]),
+            excel_path=self.excel_path or "",
+        )
         if self.excel_path:
             self.set_status("Status: Row saved to Excel.")
             messagebox.showinfo("Saved", "Row saved to Excel.", parent=self.dialog)
@@ -500,8 +533,10 @@ class ChannelManagerGUI:
     def apply_selected(self):
         selection = self.listbox.curselection()
         if not selection:
+            self._audit("apply_selected_no_selection", level=logging.WARNING)
             return
         index = selection[0]
+        self._audit("apply_selected", index=index)
         ok, msg, err_code = self.apply_row(index)
         if ok:
             messagebox.showinfo("Success", msg, parent=self.dialog)
@@ -516,6 +551,7 @@ class ChannelManagerGUI:
         self._busy = True
         self._set_controls_busy(True)
         self.set_status("Status: Applying pending updates...")
+        self._audit("apply_pending_start")
 
         def run():
             total = 0
@@ -560,9 +596,11 @@ class ChannelManagerGUI:
 
         if total == 0:
             self.set_status("Status: No rows marked READY_TO_UPDATE.")
+            self._audit("apply_pending_none")
             messagebox.showinfo("Apply Pending", "No rows marked READY_TO_UPDATE.", parent=self.dialog)
         elif failed:
             self.set_status(f"Status: Completed with errors. Success: {success}, Failed: {failed}.")
+            self._audit("apply_pending_errors", level=logging.ERROR, total=total, success=success, failed=failed)
             messagebox.showerror(
                 "Apply Pending",
                 f"Completed with errors. Success: {success}, Failed: {failed}.\nFirst error: {first_error}",
@@ -570,6 +608,7 @@ class ChannelManagerGUI:
             )
         else:
             self.set_status(f"Status: Done. Success: {success}.")
+            self._audit("apply_pending_success", total=total, success=success)
             messagebox.showinfo("Apply Pending", f"All done. Success: {success}.", parent=self.dialog)
 
         if permission_error:
@@ -610,10 +649,12 @@ class ChannelManagerGUI:
             self.df.at[index, "error_message"] = "Missing video_id"
             if refresh_ui:
                 self.refresh_list()
+            self._audit("apply_row_failed", level=logging.ERROR, index=index, error="Missing video_id")
             return False, "Missing video_id", "validation"
 
         action = str(row.get("action", "")).strip().lower()
         if action in ("skip", "ignored"):
+            self._audit("apply_row_skipped", index=index, video_id=video_id)
             return True, f"Skipped {video_id}.", ""
 
         try:
@@ -713,11 +754,13 @@ class ChannelManagerGUI:
             self.df.at[index, "error_message"] = ""
             success_msg = f"Updated {video_id}."
             err_code = ""
+            self._audit("apply_row_updated", index=index, video_id=video_id, action=action)
         except Exception as err:
             self.df.at[index, "status"] = "FAILED"
             self.df.at[index, "error_message"] = str(err)
             success_msg = str(err)
             err_code = "permission" if isinstance(err, PermissionError) else "error"
+            self._audit("apply_row_error", level=logging.ERROR, index=index, video_id=video_id, error=str(err))
         if self.excel_path:
             self.df.to_excel(self.excel_path, index=False)
         if refresh_ui:
@@ -732,6 +775,7 @@ class ChannelManagerGUI:
             "Do you want to re-login now with required permissions?"
         )
         if not messagebox.askyesno("Authentication Required", prompt, parent=self.dialog):
+            self._audit("reauth_cancelled", level=logging.WARNING)
             return False
         try:
             name = self.account_manager.add_account()
@@ -739,7 +783,9 @@ class ChannelManagerGUI:
             self.youtube = self.account_manager.youtube
             self.account_name = name
             self.account_label.config(text=f"Account: {self.account_name}")
+            self._audit("reauth_success", account=name)
             return True
         except Exception as err:
+            self._audit("reauth_failed", level=logging.ERROR, error=str(err))
             messagebox.showerror("Re-login Failed", str(err), parent=self.dialog)
             return False

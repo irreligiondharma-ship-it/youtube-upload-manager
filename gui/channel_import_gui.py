@@ -3,6 +3,7 @@ import shutil
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+import logging
 
 from config.constants import DATA_DIR, STORAGE_DIR
 from core.channel_importer import (
@@ -152,6 +153,17 @@ class ChannelImportGUI:
 
         self.toggle_downloads()
 
+    def _audit(self, event, level=logging.INFO, **details):
+        parts = [f"event={event}"]
+        for key, value in details.items():
+            if value is None:
+                continue
+            text = str(value)
+            if len(text) > 120:
+                text = text[:117] + "..."
+            parts.append(f"{key}={text}")
+        logging.log(level, "AUDIT_IMPORT | %s", " | ".join(parts))
+
     def set_status(self, text):
         self.status_label.config(text=text)
 
@@ -177,14 +189,20 @@ class ChannelImportGUI:
             filetypes=[("Excel Files", "*.xlsx"), ("All Files", "*.*")],
         )
         if path:
+            self._audit("browse_excel", path=path)
             self.excel_entry.delete(0, tk.END)
             self.excel_entry.insert(0, path)
+        else:
+            self._audit("browse_excel_cancelled")
 
     def browse_folder(self):
         path = filedialog.askdirectory(title="Select base download folder")
         if path:
+            self._audit("browse_folder", path=path)
             self.base_folder_entry.delete(0, tk.END)
             self.base_folder_entry.insert(0, path)
+        else:
+            self._audit("browse_folder_cancelled")
 
     def toggle_downloads(self):
         enabled = self.download_videos_var.get() or self.download_thumbs_var.get()
@@ -196,14 +214,24 @@ class ChannelImportGUI:
         self.skip_existing_check.config(state="normal" if download_videos else "disabled")
         if not download_videos:
             self.fast_mode_var.set(False)
+        self._audit(
+            "toggle_downloads",
+            download_videos=self.download_videos_var.get(),
+            download_thumbnails=self.download_thumbs_var.get(),
+            fast_mode=self.fast_mode_var.get(),
+            skip_existing=self.skip_existing_var.get(),
+        )
 
     def select_all(self):
+        self._audit("select_all_playlists")
         self.playlist_listbox.selection_set(0, tk.END)
 
     def clear_selection(self):
+        self._audit("clear_playlists_selection")
         self.playlist_listbox.selection_clear(0, tk.END)
 
     def clear_videos(self):
+        self._audit("clear_videos_selection")
         self.video_items = []
         self.video_playlist_id = ""
         self.video_listbox.delete(0, tk.END)
@@ -211,6 +239,7 @@ class ChannelImportGUI:
     def load_videos(self):
         selections = list(self.playlist_listbox.curselection())
         if len(selections) != 1:
+            self._audit("load_videos_invalid_selection", level=logging.WARNING, selected=len(selections))
             messagebox.showerror("Select One", "Select exactly one playlist to load videos.", parent=self.dialog)
             return
 
@@ -218,9 +247,11 @@ class ChannelImportGUI:
         playlist_id = playlist.get("id", "")
         playlist_title = playlist.get("title", "")
         if not playlist_id:
+            self._audit("load_videos_missing_playlist_id", level=logging.ERROR)
             messagebox.showerror("Invalid", "Playlist ID missing.", parent=self.dialog)
             return
 
+        self._audit("load_videos_start", playlist_id=playlist_id, playlist_title=playlist_title)
         self.set_busy(True)
         self.set_status(f"Loading videos for: {playlist_title}")
 
@@ -236,9 +267,11 @@ class ChannelImportGUI:
     def fetch_playlists(self):
         raw = self.channel_entry.get().strip()
         if not raw:
+            self._audit("fetch_playlists_missing_channel", level=logging.WARNING)
             messagebox.showerror("Missing", "Please enter a channel URL or ID.", parent=self.dialog)
             return
 
+        self._audit("fetch_playlists_start", channel_input=raw)
         self.set_busy(True)
         self.set_status("Resolving channel...")
 
@@ -267,6 +300,7 @@ class ChannelImportGUI:
             suffix = f" | {count}" if count else ""
             self.playlist_listbox.insert(tk.END, f"{title} | {pid}{suffix}")
 
+        self._audit("playlists_loaded", channel_id=channel_id, count=len(playlists))
         self.set_busy(False)
         self.dialog.update_idletasks()
         self.set_status(f"Loaded {len(playlists)} playlists.")
@@ -282,6 +316,7 @@ class ChannelImportGUI:
             vid = item.get("video_id", "")
             self.video_listbox.insert(tk.END, f"{title} | {vid}")
 
+        self._audit("videos_loaded", playlist_id=playlist_id, count=len(items))
         self.set_busy(False)
         self.dialog.update_idletasks()
         self.set_status(f"Loaded {len(items)} videos.")
@@ -289,6 +324,7 @@ class ChannelImportGUI:
     def start_import(self):
         selections = list(self.playlist_listbox.curselection())
         if not selections:
+            self._audit("start_import_no_selection", level=logging.WARNING)
             messagebox.showerror("No Selection", "Select at least one playlist.", parent=self.dialog)
             return
 
@@ -308,13 +344,16 @@ class ChannelImportGUI:
             "You confirm you have permission to download these videos.\nDo you want to continue?",
             parent=self.dialog,
         ):
+            self._audit("start_import_cancelled", reason="permission_denied")
             return
 
         if (download_videos or download_thumbs) and not base_folder:
+            self._audit("start_import_missing_base_folder", level=logging.WARNING)
             messagebox.showerror("Missing", "Select a base download folder.", parent=self.dialog)
             return
 
         if use_aria2c and not shutil.which("aria2c"):
+            self._audit("start_import_aria2c_missing", level=logging.WARNING)
             messagebox.showwarning(
                 "aria2c Not Found",
                 "Fast mode requires aria2c, but it was not found on this system.\n"
@@ -328,6 +367,7 @@ class ChannelImportGUI:
         video_filter_map = None
         if selected_videos:
             if len(selections) != 1:
+                self._audit("start_import_video_filter_invalid", level=logging.WARNING)
                 messagebox.showerror(
                     "Video Filter",
                     "Select exactly one playlist when filtering by individual videos.",
@@ -336,6 +376,7 @@ class ChannelImportGUI:
                 return
             playlist_id = self.playlists[selections[0]].get("id", "")
             if playlist_id != self.video_playlist_id:
+                self._audit("start_import_video_filter_mismatch", level=logging.WARNING)
                 messagebox.showerror(
                     "Video Filter",
                     "Loaded videos are from a different playlist. Please reload videos.",
@@ -347,6 +388,17 @@ class ChannelImportGUI:
             }
         quality = self.quality_var.get().strip() or "best"
 
+        self._audit(
+            "start_import",
+            playlists=len(selections),
+            download_videos=download_videos,
+            download_thumbnails=download_thumbs,
+            base_folder=base_folder,
+            quality=quality,
+            fast_mode=use_aria2c,
+            skip_existing=skip_existing,
+            filtered_videos=len(selected_videos),
+        )
         self.stop_event.clear()
         self.set_busy(True)
         self.set_status("Starting import...")
@@ -378,10 +430,12 @@ class ChannelImportGUI:
     def start_single_video(self):
         video_input = self.single_entry.get().strip()
         if not video_input:
+            self._audit("start_single_missing_input", level=logging.WARNING)
             messagebox.showerror("Missing", "Enter a video URL or ID.", parent=self.dialog)
             return
 
         if not extract_video_id(video_input):
+            self._audit("start_single_invalid_input", level=logging.WARNING, input=video_input)
             messagebox.showerror("Invalid", "Could not detect a valid video ID.", parent=self.dialog)
             return
 
@@ -397,6 +451,7 @@ class ChannelImportGUI:
         skip_existing = self.skip_existing_var.get()
 
         if not download_videos:
+            self._audit("start_single_missing_download", level=logging.WARNING)
             messagebox.showerror("Missing", "Enable 'Download videos' for single video.", parent=self.dialog)
             return
 
@@ -405,13 +460,16 @@ class ChannelImportGUI:
             "You confirm you have permission to download this video.\nDo you want to continue?",
             parent=self.dialog,
         ):
+            self._audit("start_single_cancelled", reason="permission_denied")
             return
 
         if (download_videos or download_thumbs) and not base_folder:
+            self._audit("start_single_missing_base_folder", level=logging.WARNING)
             messagebox.showerror("Missing", "Select a base download folder.", parent=self.dialog)
             return
 
         if use_aria2c and not shutil.which("aria2c"):
+            self._audit("start_single_aria2c_missing", level=logging.WARNING)
             messagebox.showwarning(
                 "aria2c Not Found",
                 "Fast mode requires aria2c, but it was not found on this system.\n"
@@ -422,6 +480,16 @@ class ChannelImportGUI:
 
         quality = self.quality_var.get().strip() or "best"
 
+        self._audit(
+            "start_single",
+            input=video_input,
+            download_videos=download_videos,
+            download_thumbnails=download_thumbs,
+            base_folder=base_folder,
+            quality=quality,
+            fast_mode=use_aria2c,
+            skip_existing=skip_existing,
+        )
         self.stop_event.clear()
         self.set_busy(True)
         self.set_status("Starting single video download...")
@@ -450,6 +518,7 @@ class ChannelImportGUI:
         threading.Thread(target=run, daemon=True).start()
 
     def stop_import(self):
+        self._audit("stop_import_clicked")
         self.stop_event.set()
         self.set_status("Stopping...")
 
@@ -471,6 +540,7 @@ class ChannelImportGUI:
         self.set_status(f"Done. Exported {count} rows.")
         self.current_item_label.config(text="")
         self.video_progress["value"] = 0
+        self._audit("import_done", count=count, excel_path=excel_path)
         messagebox.showinfo("Done", f"Saved {count} rows to:\n{excel_path}", parent=self.dialog)
 
     def on_cancelled(self):
@@ -478,6 +548,7 @@ class ChannelImportGUI:
         self.set_status("Canceled.")
         self.current_item_label.config(text="")
         self.video_progress["value"] = 0
+        self._audit("import_cancelled", level=logging.WARNING)
         messagebox.showinfo("Canceled", "Import canceled.", parent=self.dialog)
 
     def on_error(self, err):
@@ -485,4 +556,5 @@ class ChannelImportGUI:
         self.set_status("Error")
         self.current_item_label.config(text="")
         self.video_progress["value"] = 0
+        self._audit("import_error", level=logging.ERROR, error=str(err))
         messagebox.showerror("Error", str(err), parent=self.dialog)

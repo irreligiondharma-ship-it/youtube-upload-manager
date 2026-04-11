@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 from PIL import Image, ImageTk
+import logging
 import os
 import time
 
@@ -49,6 +50,17 @@ class YouTubeUploadGUI:
         self.refresh_stats()
 
         self.root.after(self.REFRESH_INTERVAL, self.auto_refresh)
+
+    def _audit(self, event, level=logging.INFO, **details):
+        parts = [f"event={event}"]
+        for key, value in details.items():
+            if value is None:
+                continue
+            text = str(value)
+            if len(text) > 120:
+                text = text[:117] + "..."
+            parts.append(f"{key}={text}")
+        logging.log(level, "AUDIT_GUI | %s", " | ".join(parts))
 
     # ===============================
     # Layout
@@ -157,25 +169,34 @@ class YouTubeUploadGUI:
             try:
                 self.account_manager.validate_account(target)
                 self.account_label.config(text=f"Account: {target}")
+                self._audit("load_accounts", account=target, count=len(accounts))
             except Exception:
                 self.account_label.config(text="Account: None")
+                self._audit("load_accounts_reauth_required", level=logging.WARNING, account=target)
                 self.show_reauth_prompt(target)
+        else:
+            self._audit("load_accounts_empty", level=logging.INFO)
 
     def add_account(self):
+        self._audit("add_account_clicked")
         try:
             name = self.account_manager.add_account()
             self.account_manager.load_account(name)
             self.account_label.config(text=f"Account: {name}")
             save_last_account(name)
             self.last_account_name = name
+            self._audit("add_account_success", account=name)
             messagebox.showinfo("Success", f"Account added: {name}")
         except Exception as e:
+            self._audit("add_account_failed", level=logging.ERROR, error=str(e))
             messagebox.showerror("Error", str(e))
 
     def open_channel_manager(self):
         if not self.account_manager.youtube:
+            self._audit("open_channel_manager_failed", level=logging.WARNING, reason="no_account")
             messagebox.showerror("Error", "No account loaded.")
             return
+        self._audit("open_channel_manager")
         ChannelManagerGUI(
             self.root,
             youtube_client=self.account_manager.youtube,
@@ -185,17 +206,21 @@ class YouTubeUploadGUI:
 
     def open_channel_import(self):
         if not self.account_manager.youtube:
+            self._audit("open_channel_import_failed", level=logging.WARNING, reason="no_account")
             messagebox.showerror("Error", "No account loaded.")
             return
+        self._audit("open_channel_import")
         ChannelImportGUI(self.root, youtube_client=self.account_manager.youtube)
 
     def remove_account(self):
         accounts = sorted(self.account_manager.list_accounts())
         if not accounts:
+            self._audit("remove_account_no_accounts", level=logging.WARNING)
             messagebox.showwarning("No Accounts", "No accounts found.")
             return
 
         current = self.account_manager.get_current_account() or ""
+        self._audit("remove_account_opened", current=current)
 
         dialog = tk.Toplevel(self.root)
         dialog.title("Remove Account")
@@ -223,11 +248,13 @@ class YouTubeUploadGUI:
         buttons.grid(row=2, column=0, sticky="e")
 
         def on_cancel():
+            self._audit("remove_account_cancelled")
             dialog.destroy()
 
         def on_remove():
             choice = selected.get().strip()
             if not choice:
+                self._audit("remove_account_invalid", level=logging.WARNING)
                 messagebox.showerror("Invalid", "Please select an account.", parent=dialog)
                 return
 
@@ -237,6 +264,7 @@ class YouTubeUploadGUI:
                 parent=dialog,
             )
             if not confirm:
+                self._audit("remove_account_declined", account=choice)
                 return
 
             try:
@@ -246,9 +274,11 @@ class YouTubeUploadGUI:
                     save_last_account("")
                 self.account_label.config(text="Account: None")
                 dialog.destroy()
+                self._audit("remove_account_success", account=choice)
                 messagebox.showinfo("Success", f"Removed account: {choice}")
                 self.load_accounts()
             except Exception as err:
+                self._audit("remove_account_failed", level=logging.ERROR, account=choice, error=str(err))
                 messagebox.showerror("Error", str(err), parent=dialog)
 
         ttk.Button(buttons, text="Cancel", command=on_cancel).pack(side="right", padx=(5, 0))
@@ -260,10 +290,12 @@ class YouTubeUploadGUI:
     def change_account(self):
         accounts = sorted(self.account_manager.list_accounts())
         if not accounts:
+            self._audit("change_account_no_accounts", level=logging.WARNING)
             messagebox.showwarning("No Accounts", "No accounts found.")
             return
 
         current = self.account_manager.get_current_account() or ""
+        self._audit("change_account_opened", current=current)
 
         dialog = tk.Toplevel(self.root)
         dialog.title("Change Account")
@@ -296,16 +328,19 @@ class YouTubeUploadGUI:
         buttons.grid(row=3, column=0, sticky="e")
 
         def on_cancel():
+            self._audit("change_account_cancelled")
             dialog.destroy()
 
         def on_select():
             choice = selected.get().strip()
             if not choice:
+                self._audit("change_account_invalid", level=logging.WARNING)
                 messagebox.showerror("Invalid", "Please select an account.", parent=dialog)
                 return
 
             if choice == current:
                 dialog.destroy()
+                self._audit("change_account_same", account=choice)
                 messagebox.showinfo("Info", f"Already using account: {choice}")
                 return
 
@@ -315,9 +350,11 @@ class YouTubeUploadGUI:
                 save_last_account(choice)
                 self.last_account_name = choice
                 dialog.destroy()
+                self._audit("change_account_success", account=choice)
                 messagebox.showinfo("Success", f"Loaded account: {choice}")
             except Exception:
                 dialog.destroy()
+                self._audit("change_account_reauth_required", level=logging.WARNING, account=choice)
                 self.show_reauth_prompt(choice)
 
         ttk.Button(buttons, text="Cancel", command=on_cancel).pack(side="right", padx=(5, 0))
@@ -335,6 +372,12 @@ class YouTubeUploadGUI:
         self.thumbs_path_label.config(text=f"Thumbnails: {self.selected_thumbnails_dir}")
 
     def apply_selected_sources(self):
+        self._audit(
+            "apply_selected_sources",
+            excel_file=self.selected_excel_file,
+            videos_dir=self.selected_videos_dir,
+            thumbnails_dir=self.selected_thumbnails_dir,
+        )
         self.excel = ExcelManager(excel_file=self.selected_excel_file, videos_dir=self.selected_videos_dir)
         save_input_sources(
             excel_file=self.selected_excel_file,
@@ -353,20 +396,29 @@ class YouTubeUploadGUI:
             initialfile=os.path.basename(self.selected_excel_file),
         )
         if path:
+            self._audit("select_excel_file", path=path)
             self.selected_excel_file = path
             self.apply_selected_sources()
+        else:
+            self._audit("select_excel_file_cancelled")
 
     def select_videos_folder(self):
         path = filedialog.askdirectory(title="Select videos folder", initialdir=self.selected_videos_dir)
         if path:
+            self._audit("select_videos_folder", path=path)
             self.selected_videos_dir = path
             self.apply_selected_sources()
+        else:
+            self._audit("select_videos_folder_cancelled")
 
     def select_thumbnails_folder(self):
         path = filedialog.askdirectory(title="Select thumbnails folder", initialdir=self.selected_thumbnails_dir)
         if path:
+            self._audit("select_thumbnails_folder", path=path)
             self.selected_thumbnails_dir = path
             self.apply_selected_sources()
+        else:
+            self._audit("select_thumbnails_folder_cancelled")
 
     def validate_sources(self):
         issues = []
@@ -379,11 +431,14 @@ class YouTubeUploadGUI:
             issues.append(f"Thumbnails folder not found: {self.selected_thumbnails_dir}")
 
         if issues:
+            self._audit("validate_sources_failed", level=logging.WARNING, issues="; ".join(issues))
             messagebox.showwarning("Input Sources Validation", "\n".join(issues))
         else:
+            self._audit("validate_sources_ok")
             messagebox.showinfo("Input Sources Validation", "All selected input sources are valid.")
 
     def reset_sources_to_defaults(self):
+        self._audit("reset_sources_to_defaults")
         self.selected_excel_file = EXCEL_FILE
         self.selected_videos_dir = VIDEOS_DIR
         self.selected_thumbnails_dir = THUMBNAILS_DIR
@@ -410,6 +465,12 @@ class YouTubeUploadGUI:
 
         index = selection[0]
         row = self.excel.df.iloc[index]
+        self._audit(
+            "queue_row_selected",
+            index=index,
+            title=str(row.get("title", "")).strip(),
+            status=str(row.get("status", "")).strip(),
+        )
 
         self.details_text.delete("1.0", tk.END)
         details = (
@@ -445,20 +506,25 @@ class YouTubeUploadGUI:
     # Upload Controls
     # ===============================
     def start_upload(self):
+        self._audit("start_upload_clicked")
         if not self.account_manager.youtube:
+            self._audit("start_upload_failed", level=logging.ERROR, reason="no_account")
             messagebox.showerror("Error", "No account loaded.")
             return
 
         if self.upload_worker and self.upload_worker.is_alive():
+            self._audit("start_upload_blocked", level=logging.WARNING, reason="already_running")
             messagebox.showwarning("Upload Running", "An upload is already running.")
             return
 
         pending = self.excel.get_pending_rows()
         if pending.empty:
+            self._audit("start_upload_blocked", level=logging.WARNING, reason="no_pending_rows")
             messagebox.showinfo("No Pending Rows", "No pending uploads found in queue.")
             return
 
         if not self.warn_if_excel_open():
+            self._audit("start_upload_cancelled", reason="excel_open")
             return
 
         mismatches = self._find_schedule_privacy_mismatches(pending)
@@ -481,6 +547,7 @@ class YouTubeUploadGUI:
                 + "\n\nDo you want to continue?"
             )
             if not messagebox.askyesno("Schedule Warning", warning):
+                self._audit("start_upload_cancelled", reason="schedule_privacy_mismatch")
                 return
 
         self.upload_worker = UploadWorker(
@@ -499,26 +566,31 @@ class YouTubeUploadGUI:
         self.set_controls_for_running()
         self.current_video_progress.configure(value=0)
         self.current_upload_label.config(text="Now Uploading: Preparing...")
+        self._audit("start_upload_started", account=self.account_manager.get_current_account())
         self.log("Upload started.")
 
     def toggle_pause_resume(self):
         if not self.upload_worker or not self.upload_worker.is_alive():
+            self._audit("pause_resume_ignored", level=logging.WARNING, reason="no_active_worker")
             return
         if self.is_paused:
             self.upload_worker.resume()
             self.is_paused = False
             self.pause_resume_button.config(text="Pause")
             self.worker_state_label.config(text="Upload State: Running")
+            self._audit("resume_clicked")
             self.log("Resumed.")
             return
         self.upload_worker.pause()
         self.is_paused = True
         self.pause_resume_button.config(text="Resume")
         self.worker_state_label.config(text="Upload State: Paused")
+        self._audit("pause_clicked")
         self.log("Paused.")
 
     def stop_upload(self):
         if not self.upload_worker or not self.upload_worker.is_alive():
+            self._audit("stop_ignored", level=logging.WARNING, reason="no_active_worker")
             return
 
         confirm = messagebox.askyesno(
@@ -526,10 +598,12 @@ class YouTubeUploadGUI:
             "Are you sure you want to stop the upload process?\nCurrent upload will stop as soon as possible.",
         )
         if not confirm:
+            self._audit("stop_cancelled")
             return
 
         self.upload_worker.stop()
         self.set_controls_for_stopping()
+        self._audit("stop_requested")
         self.log("Stop requested.")
 
     # ===============================
@@ -546,6 +620,7 @@ class YouTubeUploadGUI:
                 if elapsed_ms >= self.QUEUE_REFRESH_INTERVAL_MS:
                     self.refresh_queue(reload=False)
         except Exception as err:
+            self._audit("auto_refresh_warning", level=logging.WARNING, error=str(err))
             self.log(f"Auto refresh warning: {err}")
 
         if self.upload_worker and not self.upload_worker.is_alive():
@@ -556,6 +631,7 @@ class YouTubeUploadGUI:
                 self.current_upload_index = None
                 self.current_upload_label.config(text="Now Uploading: None")
                 self.current_video_progress.configure(value=0)
+                self._audit("worker_finished")
                 self.log("Upload worker finished.")
                 self._worker_finished_notified = True
 
@@ -607,14 +683,18 @@ class YouTubeUploadGUI:
                     self.worker_state_label.config(text="Upload State: Running")
                     if self.upload_worker and self.upload_worker.is_alive():
                         self.set_controls_for_running()
+                    self._audit("uploader_state", state=state)
                 elif state == "paused":
                     self.worker_state_label.config(text="Upload State: Paused")
+                    self._audit("uploader_state", state=state)
                 elif state == "stopping":
                     self.set_controls_for_stopping()
                     self.worker_state_label.config(text="Upload State: Stopping")
+                    self._audit("uploader_state", state=state)
                 elif state == "stopped":
                     self.set_controls_for_idle()
                     self.worker_state_label.config(text="Upload State: Stopped")
+                    self._audit("uploader_state", state=state)
             elif event == "item_start":
                 index = payload.get("index")
                 title = payload.get("title", "")
@@ -622,6 +702,7 @@ class YouTubeUploadGUI:
                 self.current_upload_index = index
                 self.current_video_progress.configure(value=0)
                 self.current_upload_label.config(text=f"Now Uploading: {title} ({video_path})")
+                self._audit("item_start", index=index, title=title, video_path=video_path)
                 self.log(f"Uploading row {index}: {title}")
                 self.select_queue_row_by_index(index)
             elif event == "item_done":
@@ -630,6 +711,7 @@ class YouTubeUploadGUI:
                 video_id = payload.get("video_id", "")
                 warning = payload.get("warning", "")
                 self.current_video_progress.configure(value=100)
+                self._audit("item_done", index=index, title=title, video_id=video_id, warning=warning)
                 self.log(f"Uploaded row {index}: {title} ({video_id})")
                 if warning:
                     self.log(f"Warning row {index}: {warning}")
@@ -637,6 +719,7 @@ class YouTubeUploadGUI:
                 index = payload.get("index")
                 title = payload.get("title", "")
                 error = payload.get("error", "")
+                self._audit("item_failed", level=logging.ERROR, index=index, title=title, error=error)
                 self.log(f"Failed row {index}: {title} | {error}")
         self.root.after(0, _apply)
 
@@ -647,14 +730,19 @@ class YouTubeUploadGUI:
         )
         if messagebox.askyesno("Authentication Required", prompt):
             try:
+                self._audit("reauth_confirmed", account=account_name)
                 name = self.account_manager.add_account()
                 self.account_manager.load_account(name)
                 self.account_label.config(text=f"Account: {name}")
                 save_last_account(name)
                 self.last_account_name = name
+                self._audit("reauth_success", account=name)
                 messagebox.showinfo("Success", f"Account re-authenticated: {name}")
             except Exception as err:
+                self._audit("reauth_failed", level=logging.ERROR, account=account_name, error=str(err))
                 messagebox.showerror("Error", str(err))
+        else:
+            self._audit("reauth_cancelled", account=account_name)
 
     def select_queue_row_by_index(self, index):
         try:
@@ -697,12 +785,17 @@ class YouTubeUploadGUI:
         if not self.is_file_locked_for_write(excel_path):
             return True
 
-        return messagebox.askyesno(
+        proceed = messagebox.askyesno(
             "Excel File Open",
             "The Excel file appears to be open.\n"
             "Upload can continue, but status updates may not save until the file is closed.\n"
             "Do you want to continue?",
         )
+        if proceed:
+            self._audit("excel_open_continue", excel_file=excel_path)
+        else:
+            self._audit("excel_open_cancelled", level=logging.WARNING, excel_file=excel_path)
+        return proceed
 
     def log(self, message):
         self.log_text.insert(tk.END, message + "\n")
