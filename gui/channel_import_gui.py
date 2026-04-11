@@ -140,6 +140,11 @@ class ChannelImportGUI:
             width=12,
         )
         self.cookies_combo.grid(row=5, column=1, sticky="w", padx=6, pady=(6, 0))
+        self.cookies_file_var = tk.StringVar(value="")
+        ttk.Label(options, text="Cookies file (optional)").grid(row=6, column=0, sticky="w", pady=(6, 0))
+        self.cookies_file_entry = ttk.Entry(options, textvariable=self.cookies_file_var, state="disabled")
+        self.cookies_file_entry.grid(row=6, column=1, sticky="we", padx=6, pady=(6, 0))
+        ttk.Button(options, text="Browse", command=self.browse_cookies_file).grid(row=6, column=2, pady=(6, 0))
 
         options.columnconfigure(1, weight=1)
 
@@ -249,7 +254,19 @@ class ChannelImportGUI:
         enabled = self.use_cookies_var.get()
         state = "readonly" if enabled else "disabled"
         self.cookies_combo.config(state=state)
+        self.cookies_file_entry.config(state="normal" if enabled else "disabled")
         self._audit("toggle_cookies", enabled=enabled, browser=self.cookies_browser_var.get())
+
+    def browse_cookies_file(self):
+        path = filedialog.askopenfilename(
+            title="Select cookies.txt",
+            filetypes=[("Cookies File", "*.txt"), ("All Files", "*.*")],
+        )
+        if path:
+            self.cookies_file_var.set(path)
+            self._audit("browse_cookies_file", path=path)
+        else:
+            self._audit("browse_cookies_file_cancelled")
 
     def select_all(self):
         self._audit("select_all_playlists")
@@ -372,6 +389,11 @@ class ChannelImportGUI:
         use_aria2c = self.fast_mode_var.get()
         skip_existing = self.skip_existing_var.get()
         cookies_from_browser = self.cookies_browser_var.get().strip() if self.use_cookies_var.get() else None
+        cookie_file = self.cookies_file_var.get().strip() if self.use_cookies_var.get() else ""
+        if self.use_cookies_var.get() and cookie_file and not os.path.isfile(cookie_file):
+            self._audit("start_import_cookie_file_missing", level=logging.WARNING, path=cookie_file)
+            messagebox.showerror("Missing", f"Cookies file not found:\n{cookie_file}", parent=self.dialog)
+            return
 
         if download_videos and not messagebox.askyesno(
             "Permission Confirmation",
@@ -433,6 +455,7 @@ class ChannelImportGUI:
             skip_existing=skip_existing,
             filtered_videos=len(selected_videos),
             cookies_from_browser=cookies_from_browser or "",
+            cookie_file=bool(cookie_file),
         )
         self.stop_event.clear()
         self.set_busy(True)
@@ -450,6 +473,7 @@ class ChannelImportGUI:
                     quality=quality,
                     use_aria2c=use_aria2c,
                     cookies_from_browser=cookies_from_browser,
+                    cookie_file=cookie_file or None,
                     skip_existing=skip_existing,
                     video_filter_map=video_filter_map,
                     progress_callback=self.on_progress,
@@ -486,6 +510,11 @@ class ChannelImportGUI:
         use_aria2c = self.fast_mode_var.get()
         skip_existing = self.skip_existing_var.get()
         cookies_from_browser = self.cookies_browser_var.get().strip() if self.use_cookies_var.get() else None
+        cookie_file = self.cookies_file_var.get().strip() if self.use_cookies_var.get() else ""
+        if self.use_cookies_var.get() and cookie_file and not os.path.isfile(cookie_file):
+            self._audit("start_single_cookie_file_missing", level=logging.WARNING, path=cookie_file)
+            messagebox.showerror("Missing", f"Cookies file not found:\n{cookie_file}", parent=self.dialog)
+            return
 
         if not download_videos:
             self._audit("start_single_missing_download", level=logging.WARNING)
@@ -527,6 +556,7 @@ class ChannelImportGUI:
             fast_mode=use_aria2c,
             skip_existing=skip_existing,
             cookies_from_browser=cookies_from_browser or "",
+            cookie_file=bool(cookie_file),
         )
         self.stop_event.clear()
         self.set_busy(True)
@@ -544,6 +574,7 @@ class ChannelImportGUI:
                     quality=quality,
                     use_aria2c=use_aria2c,
                     cookies_from_browser=cookies_from_browser,
+                    cookie_file=cookie_file or None,
                     skip_existing=skip_existing,
                     progress_callback=self.on_progress,
                     stop_event=self.stop_event,
