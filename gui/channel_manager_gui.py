@@ -210,7 +210,7 @@ class ChannelManagerGUI:
                 ensure_columns(self.df)
                 self.root.after(0, self.on_fetch_done)
             except Exception as err:
-                self.root.after(0, lambda: self.on_fetch_error(err))
+                self.root.after(0, lambda err=err: self.on_fetch_error(err))
 
         threading.Thread(target=run, daemon=True).start()
 

@@ -265,7 +265,7 @@ class ChannelImportGUI:
                 items = fetch_playlist_items(self.youtube, playlist_id, playlist_title)
                 self.root.after(0, lambda: self.on_videos_loaded(playlist_id, items))
             except Exception as err:
-                self.root.after(0, lambda: self.on_error(err))
+                self.root.after(0, lambda err=err: self.on_error(err))
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -286,7 +286,7 @@ class ChannelImportGUI:
                 playlists = fetch_playlists(self.youtube, channel_id)
                 self.root.after(0, lambda: self.on_playlists_loaded(channel_id, playlists))
             except Exception as err:
-                self.root.after(0, lambda: self.on_error(err))
+                self.root.after(0, lambda err=err: self.on_error(err))
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -428,7 +428,7 @@ class ChannelImportGUI:
             except InterruptedError:
                 self.root.after(0, self.on_cancelled)
             except Exception as err:
-                self.root.after(0, lambda: self.on_error(err))
+                self.root.after(0, lambda err=err: self.on_error(err))
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -518,7 +518,7 @@ class ChannelImportGUI:
             except InterruptedError:
                 self.root.after(0, self.on_cancelled)
             except Exception as err:
-                self.root.after(0, lambda: self.on_error(err))
+                self.root.after(0, lambda err=err: self.on_error(err))
 
         threading.Thread(target=run, daemon=True).start()
 
