@@ -123,6 +123,24 @@ class ChannelImportGUI:
         )
         self.fast_mode_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
+        self.use_cookies_var = tk.BooleanVar(value=False)
+        self.cookies_browser_var = tk.StringVar(value="edge")
+        self.cookies_check = ttk.Checkbutton(
+            options,
+            text="Use browser cookies",
+            variable=self.use_cookies_var,
+            command=self.toggle_cookies,
+        )
+        self.cookies_check.grid(row=5, column=0, sticky="w", pady=(6, 0))
+        self.cookies_combo = ttk.Combobox(
+            options,
+            textvariable=self.cookies_browser_var,
+            values=["edge", "chrome", "firefox", "brave", "opera"],
+            state="disabled",
+            width=12,
+        )
+        self.cookies_combo.grid(row=5, column=1, sticky="w", padx=6, pady=(6, 0))
+
         options.columnconfigure(1, weight=1)
 
         single = ttk.LabelFrame(right, text="Single Video", padding=8)
@@ -153,6 +171,7 @@ class ChannelImportGUI:
         ttk.Button(footer, text="Close", command=self.dialog.destroy).pack(side="right")
 
         self.toggle_downloads()
+        self.toggle_cookies()
 
     def _audit(self, event, level=logging.INFO, **details):
         parts = [f"event={event}"]
@@ -215,6 +234,9 @@ class ChannelImportGUI:
         self.skip_existing_check.config(state="normal" if download_videos else "disabled")
         if not download_videos:
             self.fast_mode_var.set(False)
+            self.use_cookies_var.set(False)
+        self.cookies_check.config(state="normal" if download_videos else "disabled")
+        self.toggle_cookies()
         self._audit(
             "toggle_downloads",
             download_videos=self.download_videos_var.get(),
@@ -222,6 +244,12 @@ class ChannelImportGUI:
             fast_mode=self.fast_mode_var.get(),
             skip_existing=self.skip_existing_var.get(),
         )
+
+    def toggle_cookies(self):
+        enabled = self.use_cookies_var.get()
+        state = "readonly" if enabled else "disabled"
+        self.cookies_combo.config(state=state)
+        self._audit("toggle_cookies", enabled=enabled, browser=self.cookies_browser_var.get())
 
     def select_all(self):
         self._audit("select_all_playlists")
@@ -343,6 +371,7 @@ class ChannelImportGUI:
         base_folder = self.base_folder_entry.get().strip()
         use_aria2c = self.fast_mode_var.get()
         skip_existing = self.skip_existing_var.get()
+        cookies_from_browser = self.cookies_browser_var.get().strip() if self.use_cookies_var.get() else None
 
         if download_videos and not messagebox.askyesno(
             "Permission Confirmation",
@@ -403,6 +432,7 @@ class ChannelImportGUI:
             fast_mode=use_aria2c,
             skip_existing=skip_existing,
             filtered_videos=len(selected_videos),
+            cookies_from_browser=cookies_from_browser or "",
         )
         self.stop_event.clear()
         self.set_busy(True)
@@ -419,6 +449,7 @@ class ChannelImportGUI:
                     base_download_dir=base_folder,
                     quality=quality,
                     use_aria2c=use_aria2c,
+                    cookies_from_browser=cookies_from_browser,
                     skip_existing=skip_existing,
                     video_filter_map=video_filter_map,
                     progress_callback=self.on_progress,
@@ -454,6 +485,7 @@ class ChannelImportGUI:
         base_folder = self.base_folder_entry.get().strip()
         use_aria2c = self.fast_mode_var.get()
         skip_existing = self.skip_existing_var.get()
+        cookies_from_browser = self.cookies_browser_var.get().strip() if self.use_cookies_var.get() else None
 
         if not download_videos:
             self._audit("start_single_missing_download", level=logging.WARNING)
@@ -494,6 +526,7 @@ class ChannelImportGUI:
             quality=quality,
             fast_mode=use_aria2c,
             skip_existing=skip_existing,
+            cookies_from_browser=cookies_from_browser or "",
         )
         self.stop_event.clear()
         self.set_busy(True)
@@ -510,6 +543,7 @@ class ChannelImportGUI:
                     base_download_dir=base_folder,
                     quality=quality,
                     use_aria2c=use_aria2c,
+                    cookies_from_browser=cookies_from_browser,
                     skip_existing=skip_existing,
                     progress_callback=self.on_progress,
                     stop_event=self.stop_event,

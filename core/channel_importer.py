@@ -346,6 +346,8 @@ def download_video(
     output_dir: str,
     quality: str,
     use_aria2c: bool = False,
+    cookies_from_browser: Optional[str] = None,
+    cookie_file: Optional[str] = None,
     progress_hook=None,
 ) -> Optional[str]:
     try:
@@ -362,55 +364,72 @@ def download_video(
     }
     fmt = format_map.get(quality, format_map["best"])
 
-    ydl_opts = {
-        "format": fmt,
-        "outtmpl": os.path.join(output_dir, "%(title).80s [%(id)s].%(ext)s"),
-        "quiet": True,
-        "no_warnings": True,
-        "continuedl": True,
-        "retries": 10,
-        "fragment_retries": 10,
-        "concurrent_fragment_downloads": 4,
-        "noprogress": True,
-    }
+    def _build_ydl_opts(enable_aria2c: bool):
+        ydl_opts = {
+            "format": fmt,
+            "outtmpl": os.path.join(output_dir, "%(title).80s [%(id)s].%(ext)s"),
+            "quiet": True,
+            "no_warnings": True,
+            "continuedl": True,
+            "retries": 10,
+            "fragment_retries": 10,
+            "concurrent_fragment_downloads": 4,
+            "noprogress": True,
+        }
 
-    if progress_hook:
-        def _hook(status):
-            if not progress_hook:
-                return
-            if status.get("status") == "downloading":
-                total = status.get("total_bytes") or status.get("total_bytes_estimate")
-                downloaded = status.get("downloaded_bytes", 0)
-                percent = None
-                if total:
-                    try:
-                        percent = int((downloaded / total) * 100)
-                    except ZeroDivisionError:
-                        percent = None
-                progress_hook(percent)
-            elif status.get("status") == "finished":
-                progress_hook(100)
+        if progress_hook:
+            def _hook(status):
+                if not progress_hook:
+                    return
+                if status.get("status") == "downloading":
+                    total = status.get("total_bytes") or status.get("total_bytes_estimate")
+                    downloaded = status.get("downloaded_bytes", 0)
+                    percent = None
+                    if total:
+                        try:
+                            percent = int((downloaded / total) * 100)
+                        except ZeroDivisionError:
+                            percent = None
+                    progress_hook(percent)
+                elif status.get("status") == "finished":
+                    progress_hook(100)
 
-        ydl_opts["progress_hooks"] = [_hook]
+            ydl_opts["progress_hooks"] = [_hook]
 
-    if use_aria2c:
-        if shutil.which("aria2c"):
-            ydl_opts["external_downloader"] = "aria2c"
-            ydl_opts["external_downloader_args"] = [
-                "-x",
-                "8",
-                "-s",
-                "8",
-                "-k",
-                "1M",
-            ]
-        else:
-            logging.warning("aria2c not found; falling back to native downloader.")
+        if cookie_file:
+            ydl_opts["cookiefile"] = cookie_file
+        elif cookies_from_browser:
+            ydl_opts["cookiesfrombrowser"] = (cookies_from_browser,)
 
-    with YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(video_url, download=True)
-        filename = ydl.prepare_filename(info)
-        return normalize_path(filename)
+        if enable_aria2c:
+            if shutil.which("aria2c"):
+                ydl_opts["external_downloader"] = "aria2c"
+                ydl_opts["external_downloader_args"] = [
+                    "-x",
+                    "8",
+                    "-s",
+                    "8",
+                    "-k",
+                    "1M",
+                ]
+            else:
+                logging.warning("aria2c not found; falling back to native downloader.")
+        return ydl_opts
+
+    def _run_download(enable_aria2c: bool):
+        ydl_opts = _build_ydl_opts(enable_aria2c)
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=True)
+            filename = ydl.prepare_filename(info)
+            return normalize_path(filename)
+
+    try:
+        return _run_download(use_aria2c)
+    except Exception as err:
+        if use_aria2c:
+            logging.warning("aria2c download failed; retrying with native downloader: %s", err)
+            return _run_download(False)
+        raise
 
 
 def import_playlists(
@@ -422,6 +441,8 @@ def import_playlists(
     base_download_dir: str = "",
     quality: str = "best",
     use_aria2c: bool = False,
+    cookies_from_browser: Optional[str] = None,
+    cookie_file: Optional[str] = None,
     skip_existing: bool = True,
     video_filter_map: Optional[Dict[str, Set[str]]] = None,
     progress_callback=None,
@@ -484,6 +505,8 @@ def import_playlists(
                                 output_dir=videos_dir,
                                 quality=quality,
                                 use_aria2c=use_aria2c,
+                                cookies_from_browser=cookies_from_browser,
+                                cookie_file=cookie_file,
                                 progress_hook=_progress,
                             )
                             if saved:
@@ -517,6 +540,8 @@ def import_single_video(
     base_download_dir: str = "",
     quality: str = "best",
     use_aria2c: bool = False,
+    cookies_from_browser: Optional[str] = None,
+    cookie_file: Optional[str] = None,
     skip_existing: bool = True,
     progress_callback=None,
     stop_event=None,
@@ -560,6 +585,8 @@ def import_single_video(
                     output_dir=videos_dir,
                     quality=quality,
                     use_aria2c=use_aria2c,
+                    cookies_from_browser=cookies_from_browser,
+                    cookie_file=cookie_file,
                     progress_hook=_progress,
                 )
                 if saved:
