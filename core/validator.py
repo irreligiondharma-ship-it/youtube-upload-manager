@@ -132,32 +132,51 @@ class Validator:
     # Schedule
     # ===============================
     def validate_schedule(self, schedule_time):
-        val = str(schedule_time or "").strip().lower()
-        if not val or val in ("nan", "none", "null"):
+        if schedule_time is None:
             return None
 
-        # Try a few common formats
-        formats = ["%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%d-%m-%Y %H:%M"]
-        
-        dt = None
-        for fmt in formats:
-            try:
-                dt = datetime.strptime(str(schedule_time).strip(), fmt)
-                break
-            except ValueError:
-                continue
+        # Handle pandas/numpy NaN
+        val_str = str(schedule_time).strip().lower()
+        if not val_str or val_str in ("nan", "none", "null", "nat"):
+            return None
+
+        # If it's already a datetime object (pandas often does this)
+        if isinstance(schedule_time, datetime):
+            dt = schedule_time
+        else:
+            # Try a few common formats for strings
+            formats = [
+                "%Y-%m-%d %H:%M:%S", 
+                "%Y-%m-%d %H:%M", 
+                "%d-%m-%Y %H:%M",
+                "%Y/%m/%d %H:%M",
+                "%m/%d/%Y %H:%M"
+            ]
+            dt = None
+            for fmt in formats:
+                try:
+                    dt = datetime.strptime(str(schedule_time).strip(), fmt)
+                    break
+                except ValueError:
+                    continue
 
         if dt is None:
-            raise ValueError("Invalid schedule_time format. Use YYYY-MM-DD HH:MM")
+            # Last ditch effort: try dateutil if available, or just generic parse
+            raise ValueError(f"Invalid schedule_time format: '{schedule_time}'. Use YYYY-MM-DD HH:MM")
 
         try:
-            local_tz = datetime.now().astimezone().tzinfo
-            dt_local = dt.replace(tzinfo=local_tz)
-            dt_utc = dt_local.astimezone(timezone.utc)
+            # Ensure it has timezone info, assume local if missing
+            if dt.tzinfo is None:
+                local_tz = datetime.now().astimezone().tzinfo
+                dt = dt.replace(tzinfo=local_tz)
+            
+            dt_utc = dt.astimezone(timezone.utc)
+            
             if dt_utc <= datetime.now(timezone.utc):
                 raise ValueError("schedule_time must be in the future.")
+                
             return dt_utc.isoformat().replace("+00:00", "Z")
         except Exception as e:
             if "future" in str(e):
                 raise e
-            raise ValueError("Error processing schedule time.")
+            raise ValueError(f"Error processing schedule time: {str(e)}")
