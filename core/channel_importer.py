@@ -395,13 +395,20 @@ def download_video(
             "quiet": True,
             "no_warnings": True,
             "continuedl": True,
-            "retries": 3,
-            "fragment_retries": 3,
+            "retries": 10,
+            "fragment_retries": 10,
             "concurrent_fragment_downloads": 4,
             "noprogress": True,
-            "sleep_interval": 5, # Wait 5 seconds between downloads
-            "max_sleep_interval": 10,
-            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "sleep_interval": 2, # Slightly faster between downloads
+            "max_sleep_interval": 5,
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            "nocheckcertificate": True,
+            "ignoreerrors": False, # Stop on actual error
+            "logtostderr": False,
+            "addmetadata": True,
+            "geo_bypass": True,
+            "socket_timeout": 30,
+            "http_chunk_size": 10485760, # 10MB chunks for stability
         }
 
         if progress_hook:
