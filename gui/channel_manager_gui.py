@@ -190,6 +190,28 @@ class ChannelManagerGUI:
     def set_status(self, text):
         self.status_label.config(text=text)
 
+    def _safe_save_excel(self, path, df):
+        """Attempts to save the DataFrame to Excel, using a temporary backup if locked."""
+        try:
+            df.to_excel(path, index=False)
+            temp_file = path + ".tmp"
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass
+            return True, "Saved to Excel."
+        except (PermissionError, OSError) as err:
+            temp_file = path + ".tmp"
+            logging.warning("Excel file %s is locked. Saving to temporary backup: %s", path, temp_file)
+            try:
+                df.to_excel(temp_file, index=False)
+                logging.info("Data safely backed up to %s", temp_file)
+                return False, f"File locked. Data backed up to {os.path.basename(temp_file)}", "locked"
+            except Exception as e:
+                logging.error("CRITICAL: Failed to save even to temporary file: %s", e)
+                return False, f"Failed to save: {str(err)}", "error"
+
     def fetch_videos(self):
         if self._busy:
             return
@@ -254,10 +276,14 @@ class ChannelManagerGUI:
             self._audit("export_excel_cancelled")
             return
         ensure_columns(self.df)
-        self.df.to_excel(path, index=False)
-        self.excel_path = path
-        self._audit("export_excel_saved", path=path, count=len(self.df))
-        messagebox.showinfo("Exported", f"Saved {len(self.df)} videos to Excel.", parent=self.dialog)
+        ok, msg, err_type = self._safe_save_excel(path, self.df)
+        if ok:
+            self.excel_path = path
+            self._audit("export_excel_saved", path=path, count=len(self.df))
+            messagebox.showinfo("Exported", f"Saved {len(self.df)} videos to Excel.", parent=self.dialog)
+        else:
+            self._audit("export_excel_error", level=logging.ERROR, error=msg)
+            messagebox.showwarning("Export Backup", msg, parent=self.dialog)
 
     def load_excel(self):
         path = filedialog.askopenfilename(
@@ -513,10 +539,19 @@ class ChannelManagerGUI:
                 self.df.at[index, key] = var.get().strip()
         # mark as ready for update
         self.df.at[index, "status"] = "READY_TO_UPDATE"
+        
         if self.excel_path:
-            self.df.to_excel(self.excel_path, index=False)
+            ok, msg, err_type = self._safe_save_excel(self.excel_path, self.df)
+            if ok:
+                self.set_status("Status: Row saved to Excel.")
+                messagebox.showinfo("Saved", "Row saved to Excel.", parent=self.dialog)
+            else:
+                self.set_status(f"Status: {msg}")
+                messagebox.showwarning("Save Backup", msg, parent=self.dialog)
         else:
             self.set_status("Status: Row saved in memory. Export to Excel to persist.")
+            messagebox.showinfo("Saved", "Row saved in memory. Export to Excel to persist.", parent=self.dialog)
+            
         self.refresh_list()
         self._audit(
             "row_saved",
@@ -524,11 +559,6 @@ class ChannelManagerGUI:
             video_id=str(self.df.at[index, "video_id"]),
             excel_path=self.excel_path or "",
         )
-        if self.excel_path:
-            self.set_status("Status: Row saved to Excel.")
-            messagebox.showinfo("Saved", "Row saved to Excel.", parent=self.dialog)
-        else:
-            messagebox.showinfo("Saved", "Row saved in memory. Export to Excel to persist.", parent=self.dialog)
 
     def apply_selected(self):
         selection = self.listbox.curselection()
@@ -761,8 +791,10 @@ class ChannelManagerGUI:
             success_msg = str(err)
             err_code = "permission" if isinstance(err, PermissionError) else "error"
             self._audit("apply_row_error", level=logging.ERROR, index=index, video_id=video_id, error=str(err))
+            
         if self.excel_path:
-            self.df.to_excel(self.excel_path, index=False)
+            self._safe_save_excel(self.excel_path, self.df)
+            
         if refresh_ui:
             self.refresh_list()
         return self.df.at[index, "status"] == "UPDATED", success_msg, err_code

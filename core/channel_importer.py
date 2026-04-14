@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import shutil
+import time
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 from urllib.request import urlopen
@@ -394,10 +395,13 @@ def download_video(
             "quiet": True,
             "no_warnings": True,
             "continuedl": True,
-            "retries": 10,
-            "fragment_retries": 10,
+            "retries": 3,
+            "fragment_retries": 3,
             "concurrent_fragment_downloads": 4,
             "noprogress": True,
+            "sleep_interval": 5, # Wait 5 seconds between downloads
+            "max_sleep_interval": 10,
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         }
 
         if progress_hook:
@@ -442,9 +446,22 @@ def download_video(
     def _run_download(enable_aria2c: bool):
         ydl_opts = _build_ydl_opts(enable_aria2c)
         with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(video_url, download=True)
-            filename = ydl.prepare_filename(info)
-            return normalize_path(filename)
+            try:
+                info = ydl.extract_info(video_url, download=True)
+                filename = ydl.prepare_filename(info)
+                return normalize_path(filename)
+            except Exception as e:
+                # If it's a cookie lock error, wait and retry once more with native
+                if "Could not copy Chrome cookie database" in str(e) or "cookie" in str(e).lower():
+                    logging.warning("Cookie issue detected. Waiting 5 seconds and retrying with native downloader...")
+                    time.sleep(5)
+                    # For retry, we try WITHOUT aria2c to be safer
+                    ydl_opts_retry = _build_ydl_opts(False)
+                    with YoutubeDL(ydl_opts_retry) as ydl_retry:
+                        info = ydl_retry.extract_info(video_url, download=True)
+                        filename = ydl_retry.prepare_filename(info)
+                        return normalize_path(filename)
+                raise
 
     try:
         return _run_download(use_aria2c)
@@ -470,9 +487,11 @@ def import_playlists(
     video_filter_map: Optional[Dict[str, Set[str]]] = None,
     progress_callback=None,
     stop_event=None,
-) -> int:
+) -> Dict[str, int]:
     all_rows: List[Dict[str, object]] = []
     playlist_ids = list(playlist_items_by_id.keys())
+    
+    summary = {"total": 0, "downloaded": 0, "failed": 0, "skipped": 0}
 
     for index, playlist_id in enumerate(playlist_ids, start=1):
         if stop_event and stop_event.is_set():
@@ -501,6 +520,7 @@ def import_playlists(
                 if stop_event and stop_event.is_set():
                     raise InterruptedError("Import canceled by user.")
 
+                summary["total"] += 1
                 row = item["row"]
                 def _progress(percent):
                     if progress_callback:
@@ -521,6 +541,7 @@ def import_playlists(
                             row["video_path"] = existing
                             row["status"] = "SKIPPED_ALREADY_DOWNLOADED"
                             row["error_message"] = "Already downloaded"
+                            summary["skipped"] += 1
                             _progress(100)
                         else:
                             saved = download_video(
@@ -535,9 +556,14 @@ def import_playlists(
                             if saved:
                                 row["video_path"] = saved
                                 row["status"] = "DOWNLOADED"
+                                summary["downloaded"] += 1
                     except Exception as err:
                         row["status"] = "FAILED"
                         row["error_message"] = str(err)
+                        summary["failed"] += 1
+                else:
+                    # Metadata only import
+                    summary["downloaded"] += 1
 
                 if download_thumbnails:
                     thumb_url = item.get("thumbnail_url", "")
@@ -547,11 +573,14 @@ def import_playlists(
                         saved_thumb = download_thumbnail(thumb_url, thumb_path)
                         if saved_thumb:
                             row["thumbnail_path"] = saved_thumb
+        else:
+            summary["total"] += len(rows)
+            summary["downloaded"] += len(rows)
 
         all_rows.extend(rows)
 
     export_rows(all_rows, excel_path)
-    return len(all_rows)
+    return summary
 
 
 def import_single_video(
@@ -568,7 +597,7 @@ def import_single_video(
     skip_existing: bool = True,
     progress_callback=None,
     stop_event=None,
-) -> int:
+) -> Dict[str, int]:
     video_id = extract_video_id(video_input)
     if not video_id:
         raise ValueError("Invalid video URL or ID.")
@@ -579,6 +608,7 @@ def import_single_video(
     item, detail = fetch_single_video_item(youtube, video_id)
     rows = build_import_rows([item], {video_id: detail})
 
+    summary = {"total": 1, "downloaded": 0, "failed": 0, "skipped": 0}
     row = rows[0]["row"]
     if progress_callback:
         progress_callback("download", 1, 1, row.get("title", ""), None)
@@ -593,28 +623,37 @@ def import_single_video(
                 progress_callback("download", 1, 1, row.get("title", ""), percent)
 
         if download_videos:
-            if skip_existing:
-                existing = find_existing_video_file(videos_dir, video_id)
-            else:
-                existing = None
-            if existing:
-                row["video_path"] = existing
-                row["status"] = "SKIPPED_ALREADY_DOWNLOADED"
-                row["error_message"] = "Already downloaded"
-                _progress(100)
-            else:
-                saved = download_video(
-                    video_url=row.get("youtube_url", ""),
-                    output_dir=videos_dir,
-                    quality=quality,
-                    use_aria2c=use_aria2c,
-                    cookies_from_browser=cookies_from_browser,
-                    cookie_file=cookie_file,
-                    progress_hook=_progress,
-                )
-                if saved:
-                    row["video_path"] = saved
-                    row["status"] = "DOWNLOADED"
+            try:
+                if skip_existing:
+                    existing = find_existing_video_file(videos_dir, video_id)
+                else:
+                    existing = None
+                if existing:
+                    row["video_path"] = existing
+                    row["status"] = "SKIPPED_ALREADY_DOWNLOADED"
+                    row["error_message"] = "Already downloaded"
+                    summary["skipped"] = 1
+                    _progress(100)
+                else:
+                    saved = download_video(
+                        video_url=row.get("youtube_url", ""),
+                        output_dir=videos_dir,
+                        quality=quality,
+                        use_aria2c=use_aria2c,
+                        cookies_from_browser=cookies_from_browser,
+                        cookie_file=cookie_file,
+                        progress_hook=_progress,
+                    )
+                    if saved:
+                        row["video_path"] = saved
+                        row["status"] = "DOWNLOADED"
+                        summary["downloaded"] = 1
+            except Exception as err:
+                row["status"] = "FAILED"
+                row["error_message"] = str(err)
+                summary["failed"] = 1
+        else:
+            summary["downloaded"] = 1
 
         if download_thumbnails:
             thumb_url = rows[0].get("thumbnail_url", "")
@@ -624,9 +663,11 @@ def import_single_video(
                 saved_thumb = download_thumbnail(thumb_url, thumb_path)
                 if saved_thumb:
                     row["thumbnail_path"] = saved_thumb
+    else:
+        summary["downloaded"] = 1
 
     export_rows(rows, excel_path)
-    return 1
+    return summary
 
 
 def export_rows(rows: List[Dict[str, object]], excel_path: str) -> None:
@@ -635,4 +676,22 @@ def export_rows(rows: List[Dict[str, object]], excel_path: str) -> None:
         os.makedirs(parent_dir, exist_ok=True)
     data = [item["row"] for item in rows]
     df = pd.DataFrame(data, columns=REQUIRED_COLUMNS)
-    df.to_excel(excel_path, index=False)
+    
+    try:
+        df.to_excel(excel_path, index=False)
+        # If successful, remove any temp file
+        temp_file = excel_path + ".tmp"
+        if os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except:
+                pass
+    except (PermissionError, OSError) as err:
+        temp_file = excel_path + ".tmp"
+        logging.warning("Excel file %s is locked. Saving to temporary backup: %s", excel_path, temp_file)
+        try:
+            df.to_excel(temp_file, index=False)
+            logging.info("Import data safely backed up to %s", temp_file)
+        except Exception as e:
+            logging.error("CRITICAL: Failed to save even to temporary file: %s", e)
+            raise err

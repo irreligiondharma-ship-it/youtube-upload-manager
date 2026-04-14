@@ -48,18 +48,33 @@ class ExcelManager:
         if self._pending_save:
             return False
 
-        if (not force) and (self.df is not None) and os.path.exists(self.excel_file):
-            current_mtime = os.path.getmtime(self.excel_file)
+        temp_file = self.excel_file + ".tmp"
+        use_temp = False
+        
+        # Check if temp file exists and is newer than main file
+        if os.path.exists(temp_file):
+            if not os.path.exists(self.excel_file) or os.path.getmtime(temp_file) > os.path.getmtime(self.excel_file):
+                logging.info("Found a newer temporary backup file. Attempting to recover data.")
+                use_temp = True
+
+        target_file = temp_file if use_temp else self.excel_file
+
+        if (not force) and (self.df is not None) and os.path.exists(target_file):
+            current_mtime = os.path.getmtime(target_file)
             if self._last_mtime is not None and current_mtime == self._last_mtime:
                 return False
 
-        if not os.path.exists(self.excel_file):
+        if not os.path.exists(target_file):
             logging.info("Excel file not found. Creating new one.")
             self.df = pd.DataFrame(columns=REQUIRED_COLUMNS)
             self.save()
         else:
             try:
-                ext = os.path.splitext(self.excel_file)[1].lower()
+                ext = os.path.splitext(target_file)[1].lower()
+                # Handle .tmp by looking at the original extension if needed
+                if ext == ".tmp":
+                    ext = os.path.splitext(self.excel_file)[1].lower()
+                
                 engine = None
                 if ext in (".xlsx", ".xlsm", ".xltx", ".xltm"):
                     engine = "openpyxl"
@@ -67,10 +82,14 @@ class ExcelManager:
                     engine = "xlrd"
 
                 if engine:
-                    self.df = pd.read_excel(self.excel_file, dtype=str, engine=engine)
+                    self.df = pd.read_excel(target_file, dtype=str, engine=engine)
                 else:
-                    # Try openpyxl as a sensible default
-                    self.df = pd.read_excel(self.excel_file, dtype=str, engine="openpyxl")
+                    self.df = pd.read_excel(target_file, dtype=str, engine="openpyxl")
+                
+                if use_temp:
+                    logging.info("Data successfully recovered from temporary file.")
+                    # Try to save back to main file now
+                    self.save()
             except (PermissionError, OSError) as err:
                 logging.warning("Excel read skipped due to transient file access issue: %s", err)
                 return False
@@ -118,14 +137,33 @@ class ExcelManager:
         if self._pending_save and (now - self._last_save_attempt) < self.SAVE_RETRY_COOLDOWN_SEC:
             return
         self._last_save_attempt = now
+        
+        # 1. Try normal save
         try:
             self.df.to_excel(self.excel_file, index=False)
             if os.path.exists(self.excel_file):
                 self._last_mtime = os.path.getmtime(self.excel_file)
             self._pending_save = False
+            
+            # If successful, remove any temp file
+            temp_file = self.excel_file + ".tmp"
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass
+            return
         except (PermissionError, OSError) as err:
+            logging.warning("Main Excel file locked, attempting to save to temporary file: %s", err)
             self._pending_save = True
-            logging.warning("Excel save skipped due to file lock or access issue: %s", err)
+
+        # 2. Try saving to a temporary file as fallback
+        temp_file = self.excel_file + ".tmp"
+        try:
+            self.df.to_excel(temp_file, index=False)
+            logging.info("Data safely backed up to %s", temp_file)
+        except Exception as e:
+            logging.error("CRITICAL: Failed to save even to temporary file: %s", e)
 
     def flush_pending_save(self):
         if not self._pending_save:

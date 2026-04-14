@@ -8,7 +8,7 @@ from config.constants import APP_STATE_FILE
 from config.settings import AUTO_RESUME_ON_START, RETRY_LIMIT
 from core.excel_manager import ExcelManager
 from core.validator import Validator
-from core.youtube_service import YouTubeService
+from core.youtube_service import YouTubeService, QuotaExceededError
 
 
 class Uploader:
@@ -254,6 +254,9 @@ class Uploader:
                             stop_event=self.stop_event,
                         )
                         break
+                    except QuotaExceededError as err:
+                        # Don't retry quota errors, just propagate up
+                        raise err
                     except Exception as err:
                         attempt += 1
                         if self.stop_event.is_set():
@@ -305,6 +308,22 @@ class Uploader:
                     title=str(row.get("title", "")).strip(),
                     warning=status_note,
                 )
+
+            except QuotaExceededError as err:
+                logging.error("API Quota exceeded: %s", err)
+                # Reset this row back to PENDING so it can be retried tomorrow
+                self.excel.df.at[index, "status"] = "PENDING"
+                self.excel.save()
+                self.save_state(current_index=index) # Keep state for resume
+                
+                self._notify_status(
+                    "item_failed",
+                    index=int(index),
+                    error="API Quota Exceeded. Pausing until reset.",
+                    title=str(row.get("title", "")).strip(),
+                )
+                self.pause() # Stop the uploader
+                break
 
             except Exception as err:
                 if isinstance(err, InterruptedError):

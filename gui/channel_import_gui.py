@@ -605,13 +605,42 @@ class ChannelImportGUI:
                     self.video_progress["value"] = 0
         self.root.after(0, apply)
 
-    def on_done(self, count, excel_path):
+    def on_done(self, summary, excel_path):
         self.set_busy(False)
-        self.set_status(f"Done. Exported {count} rows.")
+        self.set_status("Status: Idle")
         self.current_item_label.config(text="")
         self.video_progress["value"] = 0
-        self._audit("import_done", count=count, excel_path=excel_path)
-        messagebox.showinfo("Done", f"Saved {count} rows to:\n{excel_path}", parent=self.dialog)
+        
+        # Handle summary counts
+        total = 0
+        success = 0
+        failed = 0
+        skipped = 0
+        
+        if isinstance(summary, dict):
+            total = summary.get("total", 0)
+            success = summary.get("downloaded", 0)
+            failed = summary.get("failed", 0)
+            skipped = summary.get("skipped", 0)
+        else:
+            # Fallback for old integer return
+            total = summary
+
+        msg = (
+            f"Import Process Completed!\n\n"
+            f"Total Videos Processed: {total}\n"
+            f"Successfully Downloaded/Imported: {success}\n"
+            f"Failed: {failed}\n"
+            f"Skipped (Already exists): {skipped}\n\n"
+            f"Excel file updated: {os.path.basename(excel_path)}"
+        )
+
+        self._audit("import_done_summary", total=total, success=success, failed=failed, skipped=skipped)
+        
+        if failed > 0:
+            messagebox.showwarning("Import Summary", msg, parent=self.dialog)
+        else:
+            messagebox.showinfo("Import Summary", msg, parent=self.dialog)
 
     def on_cancelled(self):
         self.set_busy(False)

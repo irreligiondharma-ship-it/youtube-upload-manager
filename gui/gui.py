@@ -50,6 +50,35 @@ class YouTubeUploadGUI:
         self.refresh_stats()
 
         self.root.after(self.REFRESH_INTERVAL, self.auto_refresh)
+        
+        # Connect window close protocol
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def on_close(self):
+        """Handle window close event gracefully."""
+        if self.upload_worker and self.upload_worker.is_alive():
+            confirm = messagebox.askyesno(
+                "Exit Application",
+                "An upload is currently in progress. Stopping now may leave the current video in an incomplete state.\n\nDo you want to stop the upload and exit?",
+                parent=self.root
+            )
+            if not confirm:
+                self._audit("exit_cancelled", reason="upload_running")
+                return
+            
+            self._audit("exit_confirmed_stopping_worker")
+            self.upload_worker.stop()
+            # Wait a moment for the worker to signal stopping
+            time.sleep(0.5)
+
+        # Final flush of excel changes
+        try:
+            self.excel.flush_pending_save()
+        except:
+            pass
+            
+        self._audit("app_exit")
+        self.root.destroy()
 
     def _audit(self, event, level=logging.INFO, **details):
         parts = [f"event={event}"]

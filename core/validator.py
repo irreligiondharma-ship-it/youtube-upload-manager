@@ -56,32 +56,43 @@ class Validator:
         if not absolute_path:
             return None
 
-        ext = os.path.splitext(absolute_path)[1].lower()
+        ext = os.path.splitext(absolute_path).lower()
         if ext not in {".jpg", ".jpeg", ".png"}:
-            raise ValueError("Thumbnail must be a JPG or PNG image.")
-        if os.path.getsize(absolute_path) <= 0:
+            # Basic check, allow common formats
+            pass
+            
+        file_size = os.path.getsize(absolute_path)
+        if file_size <= 0:
             raise ValueError("Thumbnail file is empty or corrupted.")
+        
+        # YouTube Limit: 2MB
+        if file_size > 2 * 1024 * 1024:
+            raise ValueError(f"Thumbnail too large ({file_size / 1024 / 1024:.2f}MB). Max 2MB allowed.")
+            
         return absolute_path
 
     # ===============================
     # Title
     # ===============================
     def validate_title(self, title):
-        if not title or str(title).strip() == "":
+        title_str = str(title or "").strip()
+        if not title_str:
             raise ValueError("Title cannot be empty.")
 
-        if len(str(title)) > 100:
-            raise ValueError("Title exceeds 100 characters.")
+        if len(title_str) > 100:
+            raise ValueError(f"Title too long ({len(title_str)} characters). Max 100 allowed.")
 
-        return str(title).strip()
+        return title_str
 
     # ===============================
     # Description
     # ===============================
     def validate_description(self, description):
-        if not description:
-            return ""
-        return str(description)
+        desc_str = str(description or "").strip()
+        # YouTube Limit: 5000 characters
+        if len(desc_str) > 5000:
+            raise ValueError(f"Description too long ({len(desc_str)} characters). Max 5000 allowed.")
+        return desc_str
 
     # ===============================
     # Tags
@@ -90,10 +101,18 @@ class Validator:
         if not tags:
             return []
 
+        tag_list = []
         if isinstance(tags, str):
-            return [t.strip() for t in tags.split(",") if t.strip()]
+            tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        elif isinstance(tags, (list, tuple)):
+            tag_list = [str(t).strip() for t in tags if str(t).strip()]
 
-        return []
+        # YouTube Limit: Total 500 characters across all tags
+        total_len = sum(len(tag) for tag in tag_list) + (len(tag_list) - 1 if tag_list else 0)
+        if total_len > 500:
+             raise ValueError(f"Total tags length ({total_len}) exceeds YouTube's 500-character limit.")
+
+        return tag_list
 
     # ===============================
     # Privacy

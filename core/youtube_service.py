@@ -5,6 +5,12 @@ from typing import Optional
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import Resource, build
 from googleapiclient.http import MediaFileUpload
+from googleapiclient.errors import HttpError
+
+
+class QuotaExceededError(Exception):
+    """Custom exception for YouTube API quota exhaustion."""
+    pass
 
 
 class YouTubeService:
@@ -21,6 +27,18 @@ class YouTubeService:
         else:
             # Already constructed youtube client from AccountManager
             self.youtube = youtube_client_or_token_file
+
+    def _handle_api_error(self, err: HttpError):
+        if err.resp.status == 403:
+            import json
+            try:
+                content = json.loads(err.content)
+                for error in content.get("error", {}).get("errors", []):
+                    if error.get("reason") == "quotaExceeded":
+                        raise QuotaExceededError("YouTube API quota exceeded. Please wait for reset.") from err
+            except (ValueError, KeyError):
+                pass
+        raise err
 
     def upload_video(
         self,
@@ -64,7 +82,12 @@ class YouTubeService:
                 raise InterruptedError("Upload stopped by user.")
             if pause_event:
                 pause_event.wait()
-            status, response = request.next_chunk()
+            
+            try:
+                status, response = request.next_chunk()
+            except HttpError as err:
+                self._handle_api_error(err)
+
             if status and progress_callback:
                 percent = int(status.progress() * 100)
                 progress_callback(percent)
@@ -73,7 +96,10 @@ class YouTubeService:
 
     def upload_thumbnail(self, video_id: str, thumbnail_path: str) -> None:
         media = MediaFileUpload(thumbnail_path)
-        self.youtube.thumbnails().set(videoId=video_id, media_body=media).execute()
+        try:
+            self.youtube.thumbnails().set(videoId=video_id, media_body=media).execute()
+        except HttpError as err:
+            self._handle_api_error(err)
 
     def add_video_to_playlist(self, video_id: str, playlist_id: str) -> None:
         if not playlist_id:
@@ -89,4 +115,7 @@ class YouTubeService:
             }
         }
 
-        self.youtube.playlistItems().insert(part="snippet", body=body).execute()
+        try:
+            self.youtube.playlistItems().insert(part="snippet", body=body).execute()
+        except HttpError as err:
+            self._handle_api_error(err)
