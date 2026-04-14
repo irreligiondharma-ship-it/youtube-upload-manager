@@ -56,7 +56,7 @@ class Validator:
         if not absolute_path:
             return None
 
-        ext = os.path.splitext(absolute_path).lower()
+        ext = os.path.splitext(absolute_path)[1].lower()
         if ext not in {".jpg", ".jpeg", ".png"}:
             # Basic check, allow common formats
             pass
