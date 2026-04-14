@@ -132,16 +132,32 @@ class Validator:
     # Schedule
     # ===============================
     def validate_schedule(self, schedule_time):
-        if not schedule_time or str(schedule_time).strip() == "":
+        val = str(schedule_time or "").strip().lower()
+        if not val or val in ("nan", "none", "null"):
             return None
 
+        # Try a few common formats
+        formats = ["%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%d-%m-%Y %H:%M"]
+        
+        dt = None
+        for fmt in formats:
+            try:
+                dt = datetime.strptime(str(schedule_time).strip(), fmt)
+                break
+            except ValueError:
+                continue
+
+        if dt is None:
+            raise ValueError("Invalid schedule_time format. Use YYYY-MM-DD HH:MM")
+
         try:
-            dt = datetime.strptime(str(schedule_time), "%Y-%m-%d %H:%M")
             local_tz = datetime.now().astimezone().tzinfo
             dt_local = dt.replace(tzinfo=local_tz)
             dt_utc = dt_local.astimezone(timezone.utc)
             if dt_utc <= datetime.now(timezone.utc):
                 raise ValueError("schedule_time must be in the future.")
             return dt_utc.isoformat().replace("+00:00", "Z")
-        except ValueError:
-            raise ValueError("Invalid schedule_time format. Use YYYY-MM-DD HH:MM")
+        except Exception as e:
+            if "future" in str(e):
+                raise e
+            raise ValueError("Error processing schedule time.")
