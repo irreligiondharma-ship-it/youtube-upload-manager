@@ -5,8 +5,9 @@ import logging
 import os
 import time
 import threading
+import shutil
 
-from config.constants import APP_NAME, WINDOW_WIDTH, WINDOW_HEIGHT, EXCEL_FILE, VIDEOS_DIR, THUMBNAILS_DIR
+from config.constants import APP_NAME, WINDOW_WIDTH, WINDOW_HEIGHT, EXCEL_FILE, VIDEOS_DIR, THUMBNAILS_DIR, CREDENTIALS_FILE
 from core.account_manager import AccountManager
 from core.upload_worker import UploadWorker
 from core.excel_manager import ExcelManager
@@ -103,32 +104,63 @@ class YouTubeUploadGUI:
             return True
 
         self._audit("credentials_missing_on_startup")
-        msg = (
-            "Google API Credentials file (credentials.json) is missing!\n\n"
-            "This file is required to authenticate with YouTube.\n"
-            "Would you like to select your credentials.json file now?"
+        
+        # Custom dialog for better instructions
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Setup Required - Credentials Missing")
+        dialog.geometry("500x300")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        frame = ttk.Frame(dialog, padding=20)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text="Google API Credentials file (credentials.json) is missing!", 
+                  font=("", 10, "bold"), foreground="red").pack(pady=(0, 10))
+        
+        instructions = (
+            "This file is required to authenticate with YouTube.\n\n"
+            "Steps to get it:\n"
+            "1. Go to Google Cloud Console\n"
+            "2. Enable 'YouTube Data API v3'\n"
+            "3. Create OAuth Client ID (Type: Desktop App)\n"
+            "4. Download the JSON file"
         )
-        if not messagebox.askyesno("Setup Required", msg):
-            return False
+        ttk.Label(frame, text=instructions, justify="left").pack(pady=10)
 
-        path = filedialog.askopenfilename(
-            title="Select your Google credentials.json file",
-            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
-        )
+        result = {"action": False}
 
-        if not path:
-            return False
+        def open_guide():
+            import webbrowser
+            webbrowser.open("https://developers.google.com/youtube/registering_an_application")
 
-        try:
-            os.makedirs(os.path.dirname(CREDENTIALS_FILE), exist_ok=True)
-            shutil.copy2(path, CREDENTIALS_FILE)
-            self._audit("credentials_copied_successfully", source=path)
-            messagebox.showinfo("Success", "Credentials file has been successfully imported!")
-            return True
-        except Exception as e:
-            self._audit("credentials_copy_failed", level=logging.ERROR, error=str(e))
-            messagebox.showerror("Error", f"Failed to copy credentials file: {e}")
-            return False
+        def select_file():
+            path = filedialog.askopenfilename(
+                title="Select your Google credentials.json file",
+                filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")],
+                parent=dialog
+            )
+            if path:
+                try:
+                    os.makedirs(os.path.dirname(CREDENTIALS_FILE), exist_ok=True)
+                    shutil.copy2(path, CREDENTIALS_FILE)
+                    self._audit("credentials_copied_successfully", source=path)
+                    messagebox.showinfo("Success", "Credentials file imported! Please restart the app.", parent=dialog)
+                    result["action"] = True
+                    dialog.destroy()
+                except Exception as e:
+                    messagebox.showerror("Error", f"Failed to copy file: {e}", parent=dialog)
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(side="bottom", fill="x", pady=(20, 0))
+
+        ttk.Button(btn_frame, text="How to get this file?", command=open_guide).pack(side="left")
+        ttk.Button(btn_frame, text="Exit", command=dialog.destroy).pack(side="right", padx=5)
+        ttk.Button(btn_frame, text="Select File", command=select_file).pack(side="right")
+
+        self.root.wait_window(dialog)
+        return result["action"]
 
     # ===============================
     # Layout
