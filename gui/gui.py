@@ -27,6 +27,11 @@ class YouTubeUploadGUI:
         self.root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
         self.root.resizable(True, True)
 
+        # Ensure credentials.json exists before anything else
+        if not self.ensure_credentials():
+            self.root.destroy()
+            return
+
         self.account_manager = AccountManager()
         self.upload_worker = None
 
@@ -866,6 +871,44 @@ class YouTubeUploadGUI:
         self.start_button.config(state="normal")
         self.pause_resume_button.config(state="disabled", text="Pause")
         self.stop_button.config(state="disabled")
+        self.is_paused = False
+
+    def is_file_locked_for_write(self, path):
+        if not path or not os.path.exists(path):
+            return False
+        try:
+            with open(path, "a+b"):
+                return False
+        except OSError:
+            return True
+
+    def warn_if_excel_open(self):
+        excel_path = self.selected_excel_file
+        if not self.is_file_locked_for_write(excel_path):
+            return True
+
+        proceed = messagebox.askyesno(
+            "Excel File Open",
+            "The Excel file appears to be open.\n"
+            "Upload can continue, but status updates may not save until the file is closed.\n"
+            "Do you want to continue?",
+        )
+        if proceed:
+            self._audit("excel_open_continue", excel_file=excel_path)
+        else:
+            self._audit("excel_open_cancelled", level=logging.WARNING, excel_file=excel_path)
+        return proceed
+
+    def log(self, message):
+        self.log_text.insert(tk.END, message + "\n")
+        self.log_text.see(tk.END)
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = YouTubeUploadGUI(root)
+    root.mainloop()
+ self.stop_button.config(state="disabled")
         self.is_paused = False
 
     def is_file_locked_for_write(self, path):
