@@ -4,6 +4,7 @@ from PIL import Image, ImageTk
 import logging
 import os
 import time
+import threading
 
 from config.constants import APP_NAME, WINDOW_WIDTH, WINDOW_HEIGHT, EXCEL_FILE, VIDEOS_DIR, THUMBNAILS_DIR
 from core.account_manager import AccountManager
@@ -877,6 +878,16 @@ class YouTubeUploadGUI:
         else:
             self._audit("excel_open_cancelled", level=logging.WARNING, excel_file=excel_path)
         return proceed
+
+    def log(self, message):
+        self.log_text.insert(tk.END, message + "\n")
+        self.log_text.see(tk.END)
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = YouTubeUploadGUI(root)
+    root.mainloop()
 
     def log(self, message):
         self.log_text.insert(tk.END, message + "\n")
