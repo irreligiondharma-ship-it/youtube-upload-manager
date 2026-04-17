@@ -120,8 +120,11 @@ class YouTubeUploadGUI:
         ttk.Button(sources, text="Select Excel", command=self.select_excel_file).grid(row=0, column=0, padx=3, pady=2, sticky="w")
         ttk.Button(sources, text="Select Videos Folder", command=self.select_videos_folder).grid(row=1, column=0, padx=3, pady=2, sticky="w")
         ttk.Button(sources, text="Select Thumbnails Folder", command=self.select_thumbnails_folder).grid(row=2, column=0, padx=3, pady=2, sticky="w")
+        
         ttk.Button(sources, text="Validate Sources", command=self.validate_sources).grid(row=0, column=2, padx=3, pady=2, sticky="w")
-        ttk.Button(sources, text="Reset Defaults", command=self.reset_sources_to_defaults).grid(row=1, column=2, padx=3, pady=2, sticky="w")
+        ttk.Button(sources, text="Pre-flight Check", command=self.pre_flight_check).grid(row=1, column=2, padx=3, pady=2, sticky="w")
+        ttk.Button(sources, text="Update yt-dlp", command=self.update_downloader).grid(row=2, column=2, padx=3, pady=2, sticky="w")
+        ttk.Button(sources, text="Reset Defaults", command=self.reset_sources_to_defaults).grid(row=3, column=2, padx=3, pady=2, sticky="w")
 
         self.excel_path_label = ttk.Label(sources, text="")
         self.excel_path_label.grid(row=0, column=1, sticky="w")
@@ -196,30 +199,43 @@ class YouTubeUploadGUI:
         accounts = sorted(self.account_manager.list_accounts())
         if accounts:
             target = self.last_account_name if self.last_account_name in accounts else accounts[0]
-            try:
-                self.account_manager.validate_account(target)
-                self.account_label.config(text=f"Account: {target}")
-                self._audit("load_accounts", account=target, count=len(accounts))
-            except Exception:
-                self.account_label.config(text="Account: None")
-                self._audit("load_accounts_reauth_required", level=logging.WARNING, account=target)
-                self.show_reauth_prompt(target)
+            
+            def _load_task():
+                try:
+                    self.account_manager.validate_account(target)
+                    self.root.after(0, lambda: self.account_label.config(text=f"Account: {target}"))
+                    self._audit("load_accounts", account=target, count=len(accounts))
+                except Exception:
+                    self.root.after(0, lambda: self.account_label.config(text="Account: None"))
+                    self._audit("load_accounts_reauth_required", level=logging.WARNING, account=target)
+                    self.root.after(0, lambda: self.show_reauth_prompt(target))
+            
+            threading.Thread(target=_load_task, daemon=True).start()
         else:
             self._audit("load_accounts_empty", level=logging.INFO)
 
     def add_account(self):
         self._audit("add_account_clicked")
-        try:
-            name = self.account_manager.add_account()
-            self.account_manager.load_account(name)
-            self.account_label.config(text=f"Account: {name}")
-            save_last_account(name)
-            self.last_account_name = name
-            self._audit("add_account_success", account=name)
-            messagebox.showinfo("Success", f"Account added: {name}")
-        except Exception as e:
-            self._audit("add_account_failed", level=logging.ERROR, error=str(e))
-            messagebox.showerror("Error", str(e))
+        
+        def _task():
+            try:
+                self.log("Opening browser for authentication...")
+                name = self.account_manager.add_account()
+                self.account_manager.load_account(name)
+                
+                def _success():
+                    self.account_label.config(text=f"Account: {name}")
+                    save_last_account(name)
+                    self.last_account_name = name
+                    self._audit("add_account_success", account=name)
+                    messagebox.showinfo("Success", f"Account added: {name}")
+                
+                self.root.after(0, _success)
+            except Exception as e:
+                self._audit("add_account_failed", level=logging.ERROR, error=str(e))
+                self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+
+        threading.Thread(target=_task, daemon=True).start()
 
     def open_channel_manager(self):
         if not self.account_manager.youtube:
@@ -374,18 +390,27 @@ class YouTubeUploadGUI:
                 messagebox.showinfo("Info", f"Already using account: {choice}")
                 return
 
-            try:
-                self.account_manager.validate_account(choice)
-                self.account_label.config(text=f"Account: {choice}")
-                save_last_account(choice)
-                self.last_account_name = choice
-                dialog.destroy()
-                self._audit("change_account_success", account=choice)
-                messagebox.showinfo("Success", f"Loaded account: {choice}")
-            except Exception:
-                dialog.destroy()
-                self._audit("change_account_reauth_required", level=logging.WARNING, account=choice)
-                self.show_reauth_prompt(choice)
+            def _validate_task():
+                try:
+                    self.account_manager.validate_account(choice)
+                    def _done():
+                        self.account_label.config(text=f"Account: {choice}")
+                        save_last_account(choice)
+                        self.last_account_name = choice
+                        if dialog.winfo_exists():
+                            dialog.destroy()
+                        self._audit("change_account_success", account=choice)
+                        messagebox.showinfo("Success", f"Loaded account: {choice}")
+                    self.root.after(0, _done)
+                except Exception:
+                    def _fail():
+                        if dialog.winfo_exists():
+                            dialog.destroy()
+                        self._audit("change_account_reauth_required", level=logging.WARNING, account=choice)
+                        self.root.after(0, lambda: self.show_reauth_prompt(choice))
+                    self.root.after(0, _fail)
+
+            threading.Thread(target=_validate_task, daemon=True).start()
 
         ttk.Button(buttons, text="Cancel", command=on_cancel).pack(side="right", padx=(5, 0))
         ttk.Button(buttons, text="Select", command=on_select).pack(side="right")
@@ -811,18 +836,8 @@ class YouTubeUploadGUI:
             "Do you want to re-login now?"
         )
         if messagebox.askyesno("Authentication Required", prompt):
-            try:
-                self._audit("reauth_confirmed", account=account_name)
-                name = self.account_manager.add_account()
-                self.account_manager.load_account(name)
-                self.account_label.config(text=f"Account: {name}")
-                save_last_account(name)
-                self.last_account_name = name
-                self._audit("reauth_success", account=name)
-                messagebox.showinfo("Success", f"Account re-authenticated: {name}")
-            except Exception as err:
-                self._audit("reauth_failed", level=logging.ERROR, account=account_name, error=str(err))
-                messagebox.showerror("Error", str(err))
+            self._audit("reauth_confirmed", account=account_name)
+            self.add_account()
         else:
             self._audit("reauth_cancelled", account=account_name)
 
@@ -878,16 +893,6 @@ class YouTubeUploadGUI:
         else:
             self._audit("excel_open_cancelled", level=logging.WARNING, excel_file=excel_path)
         return proceed
-
-    def log(self, message):
-        self.log_text.insert(tk.END, message + "\n")
-        self.log_text.see(tk.END)
-
-
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = YouTubeUploadGUI(root)
-    root.mainloop()
 
     def log(self, message):
         self.log_text.insert(tk.END, message + "\n")
