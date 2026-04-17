@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "youtubeuploadmanager"
+version = "1.0.0"
+description = "A Python desktop tool to automate YouTube video uploads"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "google-api-python-client==2.130.0",
+    "google-auth==2.29.0",
+    "google-auth-oauthlib==1.2.0",
+    "google-auth-httplib2==0.2.0",
+    "pandas==2.2.1",
+    "openpyxl==3.1.2",
+    "pillow==10.3.0",
+    "pytest==8.2.0",
+    "xlrd==2.0.1",
+    "yt-dlp==2024.4.9",
+    "cryptography==42.0.5",
+]
+
+[project.scripts]
+youtube-upload-manager = "main:main"

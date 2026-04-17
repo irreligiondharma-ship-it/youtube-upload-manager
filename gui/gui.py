@@ -473,6 +473,58 @@ class YouTubeUploadGUI:
         self.selected_thumbnails_dir = THUMBNAILS_DIR
         self.apply_selected_sources()
 
+    def pre_flight_check(self):
+        self._audit("pre_flight_check_started")
+        self.excel.reload()
+        pending = self.excel.get_pending_rows()
+        if pending.empty:
+            messagebox.showinfo("Pre-flight Check", "No pending rows to check.")
+            return
+
+        from core.validator import Validator
+        validator = Validator(videos_dir=self.selected_videos_dir, thumbnails_dir=self.selected_thumbnails_dir)
+        
+        errors = []
+        for index, row in pending.iterrows():
+            video_path = str(row.get("video_path", "")).strip()
+            title = str(row.get("title", "")).strip() or f"Row {index}"
+            
+            try:
+                validator.validate_video(video_path)
+            except Exception as e:
+                errors.append(f"Row {index} ({title}): Video Error - {e}")
+
+            thumb_path = str(row.get("thumbnail_path", "")).strip()
+            if thumb_path:
+                try:
+                    validator.validate_thumbnail(thumb_path)
+                except Exception as e:
+                    errors.append(f"Row {index} ({title}): Thumbnail Error - {e}")
+
+        if errors:
+            self._audit("pre_flight_check_failed", count=len(errors))
+            error_text = "\n".join(errors[:10])
+            if len(errors) > 10:
+                error_text += f"\n...and {len(errors) - 10} more errors."
+            messagebox.showerror("Pre-flight Check Failed", f"Found {len(errors)} issues:\n\n{error_text}")
+        else:
+            self._audit("pre_flight_check_ok")
+            messagebox.showinfo("Pre-flight Check Passed", f"All {len(pending)} pending videos and thumbnails are valid and accessible.")
+
+    def update_downloader(self):
+        self._audit("update_downloader_clicked")
+        if not messagebox.askyesno("Update yt-dlp", "This will attempt to update the yt-dlp library via pip. Do you want to continue?"):
+            return
+        
+        from core.channel_importer import update_ytdlp
+        success, output = update_ytdlp()
+        if success:
+            self._audit("update_downloader_success")
+            messagebox.showinfo("Update Success", "yt-dlp has been updated successfully.")
+        else:
+            self._audit("update_downloader_failed", error=output)
+            messagebox.showerror("Update Failed", f"Failed to update yt-dlp:\n{output}")
+
     @staticmethod
     def _find_schedule_privacy_mismatches(df):
         mismatches = []

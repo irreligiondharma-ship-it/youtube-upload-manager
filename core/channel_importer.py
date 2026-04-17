@@ -19,6 +19,22 @@ _INVALID_PATH_CHARS = re.compile(r'[<>:"/\\\\|?*]+')
 _VIDEO_ID_RE = re.compile(r"(?:v=|youtu\.be/|shorts/|embed/)([A-Za-z0-9_-]{11})")
 
 
+def update_ytdlp() -> Tuple[bool, str]:
+    """Attempts to update yt-dlp to the latest version."""
+    import subprocess
+    import sys
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return True, result.stdout
+    except Exception as e:
+        return False, str(e)
+
+
 def sanitize_filename(value: str, max_len: int = 80) -> str:
     raw = str(value or "").strip()
     if not raw:

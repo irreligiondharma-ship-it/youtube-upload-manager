@@ -20,6 +20,14 @@ def create_directories():
 
 
 def main():
+    # Enable DPI awareness on Windows
+    if os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except Exception:
+            pass
+
     create_directories()
     setup_logger()
 

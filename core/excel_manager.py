@@ -175,7 +175,12 @@ class ExcelManager:
         self.load_excel(force=True)
 
     def reload_if_changed(self):
-        return self.load_excel(force=False)
+        if not self.excel_file or not os.path.exists(self.excel_file):
+            return False
+        current_mtime = os.path.getmtime(self.excel_file)
+        if self._last_mtime is not None and current_mtime <= self._last_mtime:
+            return False
+        return self.load_excel(force=True)
 
     # ===============================
     # Get Pending Rows

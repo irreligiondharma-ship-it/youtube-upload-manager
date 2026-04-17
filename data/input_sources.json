@@ -1,6 +1,6 @@
 {
   "excel_file": "G:/YouTubeUploadManager/data/upload_queue.xlsx",
-  "videos_dir": "G:/YouTubeUploadManager/storage/videos",
-  "thumbnails_dir": "G:/YouTubeUploadManager/storage/thumbnails",
+  "videos_dir": "G:/YouTubeUploadManager/storage/downloads/Season 01/videos",
+  "thumbnails_dir": "G:/tools/thumbnails/output/thumbnails",
   "last_account": "Dharma Beyond Boundaries__UCe8CjnuA9YFd2q4b3GPkiEg"
 }

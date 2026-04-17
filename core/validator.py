@@ -56,11 +56,22 @@ class Validator:
         if not absolute_path:
             return None
 
-        ext = os.path.splitext(absolute_path)[1].lower()
-        if ext not in {".jpg", ".jpeg", ".png"}:
-            # Basic check, allow common formats
-            pass
-            
+        from PIL import Image
+        try:
+            with Image.open(absolute_path) as img:
+                width, height = img.size
+                aspect_ratio = width / height
+                # Recommended: 1280x720 (16:9)
+                if width < 640 or height < 360:
+                    logging.warning(f"Thumbnail resolution is low ({width}x{height}). Minimum 640x360 recommended.")
+                
+                # Check aspect ratio (allow small tolerance)
+                target_ratio = 16 / 9
+                if abs(aspect_ratio - target_ratio) > 0.1:
+                    logging.warning(f"Thumbnail aspect ratio ({aspect_ratio:.2f}) is not 16:9. It might look cropped on YouTube.")
+        except Exception as e:
+            raise ValueError(f"Could not read thumbnail image: {e}")
+
         file_size = os.path.getsize(absolute_path)
         if file_size <= 0:
             raise ValueError("Thumbnail file is empty or corrupted.")
