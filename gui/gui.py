@@ -97,6 +97,39 @@ class YouTubeUploadGUI:
             parts.append(f"{key}={text}")
         logging.log(level, "AUDIT_GUI | %s", " | ".join(parts))
 
+    def ensure_credentials(self):
+        """Checks if credentials.json exists, prompts user to select it if not."""
+        if os.path.exists(CREDENTIALS_FILE):
+            return True
+
+        self._audit("credentials_missing_on_startup")
+        msg = (
+            "Google API Credentials file (credentials.json) is missing!\n\n"
+            "This file is required to authenticate with YouTube.\n"
+            "Would you like to select your credentials.json file now?"
+        )
+        if not messagebox.askyesno("Setup Required", msg):
+            return False
+
+        path = filedialog.askopenfilename(
+            title="Select your Google credentials.json file",
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
+        )
+
+        if not path:
+            return False
+
+        try:
+            os.makedirs(os.path.dirname(CREDENTIALS_FILE), exist_ok=True)
+            shutil.copy2(path, CREDENTIALS_FILE)
+            self._audit("credentials_copied_successfully", source=path)
+            messagebox.showinfo("Success", "Credentials file has been successfully imported!")
+            return True
+        except Exception as e:
+            self._audit("credentials_copy_failed", level=logging.ERROR, error=str(e))
+            messagebox.showerror("Error", f"Failed to copy credentials file: {e}")
+            return False
+
     # ===============================
     # Layout
     # ===============================
